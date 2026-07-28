@@ -1,0 +1,8 @@
+anthropic>=0.20.0
+openai-whisper>=20231117
+mediapipe>=0.10.0
+opencv-python>=4.8.0
+sounddevice>=0.4.6
+numpy>=1.24.0
+Pillow>=10.0.0
+websockets>=12.0

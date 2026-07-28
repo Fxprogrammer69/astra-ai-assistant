@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>ASTRA</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<div class="scanline" aria-hidden="true"></div>
+
+<div class="shell">
+
+  <!-- TITLEBAR -->
+  <div class="titlebar" id="titlebar">
+    <div class="tb-left">
+      <span class="logo">AST<span>RA</span></span>
+      <span class="status-pill online"><span class="dot"></span><span id="status-text">BOOTING</span></span>
+      <span class="mode-badge" id="mode-badge">ENGINEER MODE</span>
+    </div>
+    <div class="tb-drag" id="tb-drag"></div>
+    <div class="tb-right">
+      <span class="sys-stat"><i class="ti ti-cpu"></i><span id="tb-cpu">--</span>%</span>
+      <span class="sys-stat"><i class="ti ti-device-desktop"></i><span id="tb-ram">--</span>%</span>
+      <span class="clock" id="clock">--:--:--</span>
+      <div class="win-btns">
+        <button onclick="window.astra.minimize()" title="Minimize"><i class="ti ti-minus"></i></button>
+        <button onclick="window.astra.maximize()" title="Maximize"><i class="ti ti-square"></i></button>
+        <button class="close-btn" onclick="window.astra.close()" title="Close"><i class="ti ti-x"></i></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar" aria-label="Navigation">
+    <div class="nav-group-label">CORE</div>
+    <a class="nav-item active" data-view="dashboard" onclick="setView(this)"><i class="ti ti-dashboard"></i><span>Dashboard</span></a>
+    <a class="nav-item" data-view="chat" onclick="setView(this)"><i class="ti ti-message-circle"></i><span>Chat</span><span class="badge" id="chat-badge" style="display:none">1</span></a>
+    <a class="nav-item" data-view="tasks" onclick="setView(this)"><i class="ti ti-checklist"></i><span>Tasks</span></a>
+    <a class="nav-item" data-view="research" onclick="setView(this)"><i class="ti ti-telescope"></i><span>Research</span></a>
+    <a class="nav-item" data-view="markets" onclick="setView(this)"><i class="ti ti-chart-candle"></i><span>Markets</span><span class="nav-dot"></span></a>
+
+    <div class="nav-group-label" style="margin-top:8px">TOOLS</div>
+    <a class="nav-item" data-view="memory" onclick="setView(this)"><i class="ti ti-brain"></i><span>Memory</span></a>
+    <a class="nav-item" data-view="webhooks" onclick="setView(this)"><i class="ti ti-webhook"></i><span>Webhooks</span></a>
+    <a class="nav-item" data-view="cv" onclick="setView(this)"><i class="ti ti-eye"></i><span>CV Monitor</span></a>
+    <a class="nav-item" data-view="settings" onclick="setView(this)"><i class="ti ti-settings"></i><span>Settings</span></a>
+
+    <div class="sidebar-footer">
+      <div class="cv-indicators">
+        <span class="ind" id="ind-speech" title="Speech Engine"><i class="ti ti-microphone"></i></span>
+        <span class="ind" id="ind-cam" title="Webcam / CV"><i class="ti ti-camera"></i></span>
+        <span class="ind" id="ind-gesture" title="Gesture Engine"><i class="ti ti-hand-stop"></i></span>
+        <span class="ind" id="ind-ollama" title="Local LLM"><i class="ti ti-server"></i></span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <main class="main" id="main-content">
+
+    <!-- DASHBOARD VIEW -->
+    <div class="view active" id="view-dashboard">
+      <div class="view-header">
+        <div>
+          <h1 id="greeting">Good evening, Commander.</h1>
+          <p class="sub" id="day-summary">Loading daily summary...</p>
+        </div>
+        <div class="gesture-hud" id="gesture-hud" title="Last gesture detected">
+          <i class="ti ti-hand-stop"></i>
+          <span id="gesture-label">No gesture</span>
+        </div>
+      </div>
+
+      <div class="modes-grid">
+        <div class="mode-card active-mode" data-mode="ENGINEER MODE" data-color="#00d4ff" onclick="activateMode(this)">
+          <i class="ti ti-code"></i><div class="mc-name">Engineer</div><div class="mc-status">Active</div>
+        </div>
+        <div class="mode-card" data-mode="STUDENT MODE" data-color="#7b6ef6" onclick="activateMode(this)">
+          <i class="ti ti-book"></i><div class="mc-name">Student</div><div class="mc-status">Standby</div>
+        </div>
+        <div class="mode-card" data-mode="FOUNDER MODE" data-color="#00ff9d" onclick="activateMode(this)">
+          <i class="ti ti-rocket"></i><div class="mc-name">Founder</div><div class="mc-status">Standby</div>
+        </div>
+        <div class="mode-card" data-mode="FOCUS LOCK" data-color="#ff6b35" onclick="activateMode(this)">
+          <i class="ti ti-lock"></i><div class="mc-name">Focus Lock</div><div class="mc-status">Standby</div>
+        </div>
+        <div class="mode-card" data-mode="TRADING MODE" data-color="#ffd700" onclick="activateMode(this)">
+          <i class="ti ti-chart-line"></i><div class="mc-name">Trading</div><div class="mc-status">Standby</div>
+        </div>
+        <div class="mode-card" data-mode="RECOVERY MODE" data-color="#ff9eb5" onclick="activateMode(this)">
+          <i class="ti ti-heart"></i><div class="mc-name">Recovery</div><div class="mc-status">Standby</div>
+        </div>
+      </div>
+
+      <div class="metrics-row">
+        <div class="metric"><div class="metric-label">Focus Score</div><div class="metric-val" id="m-focus">87<span>/100</span></div><div class="mbar"><div class="mbar-fill" style="width:87%;background:#00ff9d"></div></div></div>
+        <div class="metric"><div class="metric-label">Tasks Done</div><div class="metric-val" id="m-tasks">6<span>/9</span></div><div class="mbar"><div class="mbar-fill" style="width:66%"></div></div></div>
+        <div class="metric"><div class="metric-label">Deep Work</div><div class="metric-val">3h<span>42m</span></div><div class="mbar"><div class="mbar-fill" style="width:74%;background:#7b6ef6"></div></div></div>
+        <div class="metric"><div class="metric-label">Presence</div><div class="metric-val" id="m-presence" style="font-size:13px;padding-top:4px">Detecting...</div><div class="mbar"><div class="mbar-fill" id="m-presence-bar" style="width:0%;background:#00d4ff"></div></div></div>
+      </div>
+
+      <!-- Screen Insight -->
+      <div class="insight-bar" id="insight-bar" style="display:none">
+        <i class="ti ti-eye" aria-hidden="true"></i>
+        <span id="insight-text">Screen insight loading...</span>
+        <button onclick="document.getElementById('insight-bar').style.display='none'" style="margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer"><i class="ti ti-x"></i></button>
+      </div>
+
+      <!-- Quick Chat -->
+      <div class="quick-chat-area">
+        <div class="chat-log" id="dash-chat-log">
+          <div class="msg astra-msg"><div class="msg-who">ASTRA</div><div class="msg-body">Systems online. How can I help you execute today?</div></div>
+        </div>
+        <div class="input-row">
+          <span class="ptt-indicator" id="ptt-ind" title="Push-to-talk: Alt+Space"><i class="ti ti-microphone"></i></span>
+          <input id="dash-input" class="cmd-input" placeholder="Command ASTRA... or press Alt+Space to speak"/>
+          <button class="send-btn" onclick="sendDashChat()" title="Send"><i class="ti ti-send"></i></button>
+        </div>
+        <div class="chips">
+          <button class="chip" onclick="quickSend('Activate focus lock')">🔒 Focus Lock</button>
+          <button class="chip" onclick="quickSend('Plan my next 4 hours')">📅 Schedule</button>
+          <button class="chip" onclick="quickSend('Summarize today')">📊 Summary</button>
+          <button class="chip" onclick="quickSend('Start deep work session')">⚡ Deep Work</button>
+          <button class="chip" onclick="quickSend('Summarize macro news')">📈 Markets</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- CHAT VIEW -->
+    <div class="view" id="view-chat">
+      <div class="view-header"><h1>ASTRA Chat</h1><span class="sub">Full conversation — Claude API + Ollama routing</span></div>
+      <div class="chat-log full-chat" id="full-chat-log">
+        <div class="msg astra-msg"><div class="msg-who">ASTRA</div><div class="msg-body">Full chat mode active. Context memory enabled. Type or speak.</div></div>
+      </div>
+      <div class="input-row chat-input-row">
+        <select id="model-select" class="model-sel" title="Model routing">
+          <option value="default">Auto (Claude → Ollama)</option>
+          <option value="local">Local only (Ollama)</option>
+          <option value="cloud">Cloud only (Claude)</option>
+        </select>
+        <input id="chat-input" class="cmd-input" placeholder="Message ASTRA..."/>
+        <button class="send-btn" onclick="sendFullChat()"><i class="ti ti-send"></i></button>
+      </div>
+    </div>
+
+    <!-- CV MONITOR VIEW -->
+    <div class="view" id="view-cv">
+      <div class="view-header"><h1>CV Monitor</h1><span class="sub">Screen awareness · Presence · Gestures</span></div>
+      <div class="cv-grid">
+        <div class="cv-card">
+          <div class="cv-card-title"><i class="ti ti-hand-stop"></i> Gesture Reference</div>
+          <div class="gesture-list">
+            <div class="gl-item"><span class="gl-icon">✊</span><span class="gl-name">FIST</span><span class="gl-action">→ Focus Lock</span></div>
+            <div class="gl-item"><span class="gl-icon">🖐</span><span class="gl-name">OPEN HAND</span><span class="gl-action">→ Switch Mode</span></div>
+            <div class="gl-item"><span class="gl-icon">✌️</span><span class="gl-name">PEACE</span><span class="gl-action">→ Deep Work</span></div>
+            <div class="gl-item"><span class="gl-icon">👍</span><span class="gl-name">THUMBS UP</span><span class="gl-action">→ Confirm</span></div>
+            <div class="gl-item"><span class="gl-icon">☝️</span><span class="gl-name">POINT UP</span><span class="gl-action">→ Scroll Up</span></div>
+            <div class="gl-item"><span class="gl-icon">👇</span><span class="gl-name">POINT DOWN</span><span class="gl-action">→ Scroll Down</span></div>
+          </div>
+        </div>
+        <div class="cv-card">
+          <div class="cv-card-title"><i class="ti ti-eye"></i> CV Status</div>
+          <div class="cv-status-list" id="cv-status-list">
+            <div class="cvs-item"><span>MediaPipe</span><span class="cvs-badge loading" id="cvs-mp">Loading</span></div>
+            <div class="cvs-item"><span>Webcam</span><span class="cvs-badge loading" id="cvs-cam">Loading</span></div>
+            <div class="cvs-item"><span>Whisper STT</span><span class="cvs-badge loading" id="cvs-whisper">Loading</span></div>
+            <div class="cvs-item"><span>Screen Watch</span><span class="cvs-badge loading" id="cvs-screen">Loading</span></div>
+            <div class="cvs-item"><span>Ollama</span><span class="cvs-badge loading" id="cvs-ollama">Loading</span></div>
+          </div>
+        </div>
+        <div class="cv-card">
+          <div class="cv-card-title"><i class="ti ti-activity"></i> Live Events</div>
+          <div class="cv-event-log" id="cv-event-log">
+            <div class="cve-item muted">Waiting for CV events...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TASKS VIEW -->
+    <div class="view" id="view-tasks">
+      <div class="view-header"><h1>Tasks</h1><button class="action-btn" onclick="addTask()"><i class="ti ti-plus"></i> Add Task</button></div>
+      <div class="task-list" id="task-list">
+        <div class="task-item" data-tag="CODE"><div class="task-check done"><i class="ti ti-check"></i></div><span class="task-label done-label">Fix auth JWT bug</span><span class="task-tag tag-code">CODE</span><button class="task-del" onclick="delTask(this)"><i class="ti ti-x"></i></button></div>
+        <div class="task-item" data-tag="STUDY"><div class="task-check" onclick="checkTask(this)"></div><span class="task-label">Revise calculus Ch.7</span><span class="task-tag tag-study">STUDY</span><button class="task-del" onclick="delTask(this)"><i class="ti ti-x"></i></button></div>
+        <div class="task-item" data-tag="CODE"><div class="task-check" onclick="checkTask(this)"></div><span class="task-label">ASTRA webhook engine</span><span class="task-tag tag-code">CODE</span><button class="task-del" onclick="delTask(this)"><i class="ti ti-x"></i></button></div>
+        <div class="task-item" data-tag="BUILD"><div class="task-check" onclick="checkTask(this)"></div><span class="task-label">SaaS competitor research</span><span class="task-tag tag-build">BUILD</span><button class="task-del" onclick="delTask(this)"><i class="ti ti-x"></i></button></div>
+        <div class="task-item" data-tag="CODE"><div class="task-check" onclick="checkTask(this)"></div><span class="task-label">Deploy backend to Railway</span><span class="task-tag tag-code">CODE</span><button class="task-del" onclick="delTask(this)"><i class="ti ti-x"></i></button></div>
+      </div>
+    </div>
+
+    <!-- SETTINGS VIEW -->
+    <div class="view" id="view-settings">
+      <div class="view-header"><h1>Settings</h1></div>
+      <div class="settings-grid">
+        <div class="settings-card">
+          <div class="sc-title">API Keys</div>
+          <label class="sc-label">Anthropic API Key</label>
+          <input class="sc-input" type="password" id="s-anthropic" placeholder="sk-ant-..."/>
+          <label class="sc-label" style="margin-top:12px">Ollama Model</label>
+          <select class="sc-input" id="s-ollama-model">
+            <option value="llama3.1:8b">llama3.1:8b (Recommended)</option>
+            <option value="llama3.2:3b">llama3.2:3b (Fast)</option>
+            <option value="mistral:7b">mistral:7b (Coding)</option>
+            <option value="deepseek-coder:6.7b">deepseek-coder:6.7b (DSA)</option>
+            <option value="phi3:mini">phi3:mini (Lightweight)</option>
+          </select>
+          <button class="sc-btn" onclick="saveSettings()">Save Settings</button>
+        </div>
+        <div class="settings-card">
+          <div class="sc-title">CV & Speech</div>
+          <label class="sc-label">Whisper Model</label>
+          <select class="sc-input" id="s-whisper">
+            <option value="tiny">tiny (fastest, ~1GB)</option>
+            <option value="base">base (balanced)</option>
+            <option value="small">small (accurate)</option>
+          </select>
+          <label class="sc-label" style="margin-top:12px">Screenshot Interval (sec)</label>
+          <input class="sc-input" type="number" id="s-screenshot" value="10" min="5" max="60"/>
+          <label class="sc-label" style="margin-top:12px">Gesture Confidence</label>
+          <input class="sc-input" type="range" id="s-gesture-conf" min="50" max="95" value="75"/>
+        </div>
+        <div class="settings-card">
+          <div class="sc-title">Shortcuts</div>
+          <div class="shortcut-item"><span>Push-to-talk</span><kbd>Alt + Space</kbd></div>
+          <div class="shortcut-item"><span>Quick open</span><kbd>Ctrl + Shift + A</kbd></div>
+          <div class="shortcut-item"><span>Focus lock</span><kbd>Ctrl + Shift + F</kbd></div>
+          <div class="shortcut-item"><span>Send message</span><kbd>Enter</kbd></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RESEARCH / MARKETS / MEMORY / WEBHOOKS views (placeholder) -->
+    <div class="view" id="view-research"><div class="view-header"><h1>Research</h1></div><div class="placeholder-view"><i class="ti ti-telescope"></i><p>Research engine powered by Claude + web search.</p><button class="action-btn" onclick="quickSend('Research the latest AI infrastructure trends')">Start Research ↗</button></div></div>
+    <div class="view" id="view-markets"><div class="view-header"><h1>Markets</h1></div><div class="placeholder-view"><i class="ti ti-chart-candle"></i><p>Connect Zerodha, Binance, or Alpaca APIs in Settings.</p><button class="action-btn" onclick="quickSend('Summarize overnight macro news')">Get Market Brief ↗</button></div></div>
+    <div class="view" id="view-memory"><div class="view-header"><h1>Memory</h1></div><div class="placeholder-view"><i class="ti ti-brain"></i><p>ASTRA memory — goals, projects, context, preferences.</p><div class="memory-dump" id="memory-dump">Loading...</div></div></div>
+    <div class="view" id="view-webhooks"><div class="view-header"><h1>Webhooks</h1></div><div class="placeholder-view"><i class="ti ti-webhook"></i><p>WebSocket server active on port 9001. Connect n8n, Zapier, or custom scripts.</p><div class="code-block">ws://localhost:9001</div></div></div>
+
+  </main>
+
+  <!-- RIGHT PANEL -->
+  <aside class="right-panel">
+    <!-- Focus Timer -->
+    <div class="rp-section">
+      <div class="rp-title">Focus Timer</div>
+      <div class="timer-block">
+        <div class="timer-val" id="timer-val">25:00</div>
+        <div class="timer-sub" id="timer-sub">POMODORO</div>
+        <div class="timer-progress"><div class="timer-progress-fill" id="timer-prog"></div></div>
+        <div class="timer-btns">
+          <button class="tbtn active" id="timer-start" onclick="toggleTimer()">START</button>
+          <button class="tbtn" onclick="resetTimer()">RESET</button>
+          <button class="tbtn" onclick="setTimer(50)">50m</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- System Stats -->
+    <div class="rp-section">
+      <div class="rp-title">System</div>
+      <div class="stat-row"><span class="stat-lbl">CPU</span><div class="stat-bar"><div class="stat-fill" id="s-cpu" style="width:42%;background:#00d4ff"></div></div><span class="stat-num" id="n-cpu">42%</span></div>
+      <div class="stat-row"><span class="stat-lbl">RAM</span><div class="stat-bar"><div class="stat-fill" id="s-ram" style="width:61%;background:#7b6ef6"></div></div><span class="stat-num" id="n-ram">61%</span></div>
+      <div class="stat-row"><span class="stat-lbl">NET</span><div class="stat-bar"><div class="stat-fill" id="s-net" style="width:28%;background:#00ff9d"></div></div><span class="stat-num" id="n-net">28%</span></div>
+    </div>
+
+    <!-- Tasks Summary -->
+    <div class="rp-section">
+      <div class="rp-title">Today's Tasks</div>
+      <div class="mini-tasks" id="mini-tasks">
+        <div class="mt-item done-item"><i class="ti ti-circle-check"></i> Fix auth JWT bug</div>
+        <div class="mt-item"><i class="ti ti-circle"></i> ASTRA webhook engine</div>
+        <div class="mt-item"><i class="ti ti-circle"></i> SaaS competitor research</div>
+        <div class="mt-item"><i class="ti ti-circle"></i> Deploy to Railway</div>
+      </div>
+    </div>
+
+    <!-- Markets -->
+    <div class="rp-section">
+      <div class="rp-title">Markets</div>
+      <div class="market-list">
+        <div class="mkt-item"><span class="ticker">BTC</span><span class="price">$67,420</span><span class="chg up">+2.4%</span></div>
+        <div class="mkt-item"><span class="ticker">NIFTY</span><span class="price">22,843</span><span class="chg dn">-0.3%</span></div>
+        <div class="mkt-item"><span class="ticker">ETH</span><span class="price">$3,512</span><span class="chg up">+1.8%</span></div>
+        <div class="mkt-item"><span class="ticker">GOLD</span><span class="price">$2,341</span><span class="chg up">+0.6%</span></div>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+{
+  "name": "astra-ai-assistant",
+  "version": "1.0.0",
+  "description": "ASTRA — Autonomous Desktop Intelligence System",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux",
+    "python": "python src/brain/server.py"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.astra.desktop",
+    "productName": "ASTRA",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fxprogrammer69/astra-ai-assistant.git"
+  },
+  "license": "MIT"
+}

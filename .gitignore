@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+models/memory.json
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+Thumbs.db
+*.log
+mobile/node_modules/
