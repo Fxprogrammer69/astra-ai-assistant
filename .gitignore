@@ -9,3 +9,11 @@ __pycache__/
 Thumbs.db
 *.log
 mobile/node_modules/
+
+astra-runtime.log
+launch-debug.log
+launch-out.log
+astra-err.log
+astra-out.log
+min-test/
+
