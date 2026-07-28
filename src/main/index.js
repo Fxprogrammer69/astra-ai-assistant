@@ -72,8 +72,25 @@ function createWindow() {
   if (fs.existsSync(iconPath)) opts.icon = iconPath;
 
   mainWindow = new BrowserWindow(opts);
+
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.error('[ASTRA] did-fail-load', code, desc, url);
+  });
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[ASTRA] renderer gone', details);
+  });
+
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  // Always show — ready-to-show can miss if load is slow/cached oddly
+  mainWindow.once('ready-to-show', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
+  });
+  // Fallback show if ready-to-show never fires
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      mainWindow.show();
+    }
+  }, 1500);
 
   if (process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
