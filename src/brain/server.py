@@ -344,7 +344,12 @@ class VisionEngine:
 
     def _load_mediapipe(self):
         mp = try_import("mediapipe")
-        if mp:
+        if not mp:
+            return
+        try:
+            if not hasattr(mp, "solutions"):
+                self.event_cb({"type": "warn", "msg": "MediaPipe install incomplete (no solutions). Reinstall: pip install mediapipe"})
+                return
             self.mp = mp
             self.mp_hands = mp.solutions.hands.Hands(
                 static_image_mode=False,
@@ -356,6 +361,9 @@ class VisionEngine:
                 model_selection=0, min_detection_confidence=0.6
             )
             self.event_cb({"type": "cv_ready", "msg": "MediaPipe loaded — CV online"})
+        except Exception as e:
+            self.mp = None
+            self.event_cb({"type": "warn", "msg": f"MediaPipe init failed: {e}"})
 
     def start_webcam_loop(self):
         cv2 = try_import("cv2")
@@ -497,10 +505,19 @@ class ASTRABrain:
     def __init__(self):
         self.nlp = NLPRouter()
         self.memory = MemoryLayer()
-        self.speech = SpeechEngine(self.emit)
-        self.vision = VisionEngine(self.emit)
         self.webhooks = None
+        # Webhooks first — always available even if CV/speech fail
         self._start_webhooks()
+        try:
+            self.speech = SpeechEngine(self.emit)
+        except Exception as e:
+            self.speech = None
+            self.emit({"type": "warn", "msg": f"Speech engine init failed: {e}"})
+        try:
+            self.vision = VisionEngine(self.emit)
+        except Exception as e:
+            self.vision = None
+            self.emit({"type": "warn", "msg": f"Vision engine init failed: {e}"})
         self._start_threads()
 
     def emit(self, event: dict):
@@ -555,10 +572,18 @@ class ASTRABrain:
         # Defer heavy CV/speech so chat + webhooks come up fast
         def _later():
             time.sleep(2)
-            threading.Thread(target=self.speech.start_vad_loop, daemon=True).start()
-            threading.Thread(target=self.vision.start_webcam_loop, daemon=True).start()
-            self.vision.running = True
-            threading.Thread(target=self.vision.start_screen_loop, args=(self.nlp,), daemon=True).start()
+            if self.speech:
+                try:
+                    threading.Thread(target=self.speech.start_vad_loop, daemon=True).start()
+                except Exception as e:
+                    self.emit({"type": "warn", "msg": f"Speech loop failed: {e}"})
+            if self.vision:
+                try:
+                    self.vision.running = True
+                    threading.Thread(target=self.vision.start_webcam_loop, daemon=True).start()
+                    threading.Thread(target=self.vision.start_screen_loop, args=(self.nlp,), daemon=True).start()
+                except Exception as e:
+                    self.emit({"type": "warn", "msg": f"Vision loop failed: {e}"})
         threading.Thread(target=_later, daemon=True).start()
 
         cp = CONFIG.get("cloud_provider") or "none"
