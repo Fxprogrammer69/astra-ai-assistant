@@ -30,6 +30,7 @@ function setView(el){
   const target = document.getElementById('view-'+view);
   if(target) target.classList.add('active');
   if(view === 'memory') loadMemory();
+  if(view === 'webhooks') refreshWebhookLog();
 }
 
 // ── Mode Activation ───────────────────────────────────────────────────────────
@@ -133,12 +134,13 @@ const DEMO = {
   'debug':        'Paste your stack trace and I will isolate the root cause.',
   'deploy':       'Railway deployment requires your API key in Settings. Run: railway up --detach from your project root.',
   'research':     'Initiating research engine. What topic or competitors should I analyze?',
+  'webhook':      'Webhooks live on http://localhost:9003 — POST /github, /stripe, /astra, or /custom/*.',
 };
 
 function demoReply(text){
   const lower = text.toLowerCase();
   for(const k in DEMO){ if(lower.includes(k)) return DEMO[k]; }
-  return `Understood. Processing: "${text}" — Connect Claude API in Settings for full intelligence.`;
+  return `Understood. Processing: "${text}" — Grok (xAI) is primary. Key is loaded from .env when running the desktop app.`;
 }
 
 // ── Focus Timer ───────────────────────────────────────────────────────────────
@@ -256,6 +258,68 @@ function addCVEvent(type, text){
   if(log.children.length > 30) log.lastChild.remove();
 }
 
+// ── Webhook UI ────────────────────────────────────────────────────────────────
+function setWebhookOnline(port, msg){
+  const pill = document.getElementById('wh-status-pill');
+  const m = document.getElementById('wh-status-msg');
+  const url = document.getElementById('wh-base-url');
+  const curl = document.getElementById('wh-curl');
+  if(pill){ pill.textContent = 'ONLINE'; pill.classList.remove('off'); }
+  if(m) m.textContent = msg || `Listening on port ${port || 9003}`;
+  if(url) url.textContent = `http://localhost:${port || 9003}`;
+  if(curl) curl.textContent = `curl -X POST http://localhost:${port || 9003}/astra \\\n  -H "Content-Type: application/json" \\\n  -d "{\\"text\\":\\"Hello ASTRA\\"}"`;
+}
+
+function pushWebhookLog(path, eventName, summary){
+  const log = document.getElementById('wh-live-log');
+  if(!log) return;
+  if(log.querySelector('.wh-log-item') && log.textContent.includes('No events yet')) log.innerHTML = '';
+  const now = new Date();
+  const ts = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  const div = document.createElement('div');
+  div.className = 'wh-log-item';
+  div.innerHTML = `<span class="ts">${ts}</span> <span class="ev">${eventName || 'event'}</span> · <b>${path || '?'}</b><br/>${(summary || '').toString().slice(0,180)}`;
+  log.insertBefore(div, log.firstChild);
+  while(log.children.length > 40) log.lastChild.remove();
+  const dot = document.getElementById('wh-nav-dot');
+  if(dot) dot.style.display = 'block';
+  addCVEvent('webhook', `Webhook ${path}: ${eventName || ''}`);
+}
+
+function testWebhook(){
+  if(isElectron){
+    window.astra.sendToPython({
+      type: 'webhook_test',
+      path: '/custom/ui-test',
+      payload: { source: 'astra-ui', message: 'Test from ASTRA desktop', ts: new Date().toISOString() }
+    });
+  } else {
+    pushWebhookLog('/custom/ui-test', 'test.ui', 'Demo mode — brain offline');
+  }
+  appendMsg('dash-chat-log', 'astra', 'Webhook test event fired.');
+}
+
+function refreshWebhookLog(){
+  if(isElectron) window.astra.sendToPython({ type: 'get_webhook_log' });
+}
+
+function sendOutgoingWebhook(){
+  const url = document.getElementById('wh-out-url')?.value?.trim();
+  let payload = {};
+  try { payload = JSON.parse(document.getElementById('wh-out-body')?.value || '{}'); }
+  catch(_){ appendMsg('dash-chat-log','astra','Outgoing payload must be valid JSON.'); return; }
+  if(!url){ appendMsg('dash-chat-log','astra','Enter a destination URL for the outgoing webhook.'); return; }
+  if(isElectron){
+    window.astra.sendToPython({ type: 'webhook_out', url, payload });
+  }
+  pushWebhookLog('OUT', 'webhook.out', url);
+}
+
+function copyCurl(){
+  const t = document.getElementById('wh-curl')?.textContent || '';
+  if(navigator.clipboard) navigator.clipboard.writeText(t).then(() => appendMsg('dash-chat-log','astra','Curl snippet copied.'));
+}
+
 // ── Python Brain Events ───────────────────────────────────────────────────────
 function handleBrainEvent(raw){
   let data;
@@ -266,6 +330,12 @@ function handleBrainEvent(raw){
 
   if(type === 'brain_ready'){
     setStatus('ONLINE', true);
+    const pb = document.getElementById('provider-badge');
+    if(pb) pb.textContent = (data.provider || 'Grok') + (data.model ? ' · ' + data.model : '');
+    if(data.has_xai){
+      setIndicator('ind-ollama', true);
+      setCVStatus('cvs-ollama', 'ok', 'Grok');
+    }
   } else if(type === 'chat_response'){
     appendMsg(pendingLog, 'astra', data.text);
   } else if(type === 'speech_ready'){
@@ -310,15 +380,41 @@ function handleBrainEvent(raw){
     addCVEvent('mode', `Screen: ${data.text.substring(0,60)}...`);
   } else if(type === 'screen_watch_active'){
     setCVStatus('cvs-screen', 'ok', 'Online');
+  } else if(type === 'webhook_server_ready'){
+    setWebhookOnline(data.port, data.msg);
+  } else if(type === 'webhook_in'){
+    const summary = typeof data.payload === 'object' ? JSON.stringify(data.payload).slice(0,160) : String(data.payload||'');
+    pushWebhookLog(data.path, data.event, summary);
+    appendMsg('dash-chat-log', 'astra', `Webhook received: ${data.event || data.path}`);
+  } else if(type === 'webhook_reply'){
+    pushWebhookLog(data.path, 'astra.reply', data.reply);
+    appendMsg('dash-chat-log', 'astra', `Webhook → Grok: ${data.reply}`);
+  } else if(type === 'webhook_log'){
+    const log = document.getElementById('wh-live-log');
+    if(log && Array.isArray(data.items)){
+      log.innerHTML = '';
+      if(!data.items.length){
+        log.innerHTML = '<div class="wh-log-item"><span class="ts">//</span> No stored webhook events yet.</div>';
+      } else {
+        data.items.slice().reverse().forEach(it => {
+          pushWebhookLog(it.path, it.event, it.summary || '');
+        });
+      }
+    }
+  } else if(type === 'webhook_out_result'){
+    appendMsg('dash-chat-log', 'astra', data.ok ? `Outgoing webhook OK → ${data.url}` : `Outgoing webhook failed → ${data.url}`);
+  } else if(type === 'webhook_test_ok'){
+    // already logged via webhook_in
+  } else if(type === 'config_updated'){
+    if(data.has_xai){ setIndicator('ind-ollama', true); setCVStatus('cvs-ollama','ok','Grok'); }
   } else if(type === 'warn'){
     console.warn('[ASTRA Brain]', data.msg);
     addCVEvent('mode', `⚠ ${data.msg}`);
-    // Mark relevant subsystem as error
     if(data.msg.includes('Whisper'))   setCVStatus('cvs-whisper','error','Install req.');
     if(data.msg.includes('MediaPipe')) setCVStatus('cvs-mp','error','Install req.');
     if(data.msg.includes('Webcam'))    setCVStatus('cvs-cam','error','Not found');
     if(data.msg.includes('Screen'))    setCVStatus('cvs-screen','error','Install req.');
-    if(data.msg.includes('Ollama'))    setCVStatus('cvs-ollama','error','Not running');
+    if(data.msg.includes('Ollama') || data.msg.includes('Grok')) setCVStatus('cvs-ollama','error','Check key');
   }
 }
 
@@ -370,25 +466,35 @@ function setCVStatus(id, state, label){
 // ── Settings ──────────────────────────────────────────────────────────────────
 async function loadSettings(){
   if(!isElectron) return;
+  const xai = await window.astra.getStore('xai_key') || '';
+  const xaiModel = await window.astra.getStore('xai_model') || 'grok-4.5';
   const key = await window.astra.getStore('anthropic_key') || '';
   const model = await window.astra.getStore('ollama_model') || 'llama3.1:8b';
   const whisper = await window.astra.getStore('whisper_model') || 'tiny';
+  const sx = document.getElementById('s-xai'); if(sx && xai) sx.value = xai;
+  const sxm = document.getElementById('s-xai-model'); if(sxm) sxm.value = xaiModel;
   const si = document.getElementById('s-anthropic'); if(si) si.value = key;
   const sm = document.getElementById('s-ollama-model'); if(sm) sm.value = model;
   const sw = document.getElementById('s-whisper'); if(sw) sw.value = whisper;
 }
 
 async function saveSettings(){
+  const xai = document.getElementById('s-xai')?.value || '';
+  const xaiModel = document.getElementById('s-xai-model')?.value || 'grok-4.5';
   const key = document.getElementById('s-anthropic')?.value || '';
   const model = document.getElementById('s-ollama-model')?.value || 'llama3.1:8b';
   const whisper = document.getElementById('s-whisper')?.value || 'tiny';
   const screenshot = parseInt(document.getElementById('s-screenshot')?.value || '10');
   const gestureConf = parseInt(document.getElementById('s-gesture-conf')?.value || '75');
   if(isElectron){
+    await window.astra.setStore('xai_key', xai);
+    await window.astra.setStore('xai_model', xaiModel);
     await window.astra.setStore('anthropic_key', key);
     await window.astra.setStore('ollama_model', model);
     await window.astra.setStore('whisper_model', whisper);
     window.astra.sendToPython({ type:'set_config', config:{
+      xai_key: xai,
+      xai_model: xaiModel,
       anthropic_key: key,
       ollama_model: model,
       whisper_model: whisper,
@@ -396,7 +502,7 @@ async function saveSettings(){
       gesture_confidence: gestureConf/100
     }});
   }
-  appendMsg('dash-chat-log','astra','Settings saved. Restart ASTRA to apply all changes.');
+  appendMsg('dash-chat-log','astra','Settings saved. Grok key applied for new messages.');
 }
 
 // ── Memory ────────────────────────────────────────────────────────────────────
@@ -431,9 +537,9 @@ if(isElectron){
 
 // ── Day Summary ───────────────────────────────────────────────────────────────
 const summaries = [
-  '// 3 HIGH-PRIORITY OBJECTIVES DETECTED TODAY',
+  '// GROK ONLINE — WEBHOOKS ARMED ON :9003',
   '// ASTRA ONLINE — SYSTEMS NOMINAL',
-  '// CONTEXT MEMORY ACTIVE — 12 SESSIONS LOADED',
+  '// CONTEXT MEMORY ACTIVE — READY TO EXECUTE',
 ];
 const sub = document.getElementById('day-summary');
 if(sub) sub.textContent = summaries[Math.floor(Math.random()*summaries.length)];
@@ -443,6 +549,8 @@ setTimeout(() => setStatus('ONLINE', true), 800);
 setTimeout(() => {
   if(!isElectron){
     setStatus('DEMO MODE', true);
+    const pill = document.querySelector('.status-pill');
+    if(pill){ pill.classList.remove('online'); pill.classList.add('demo'); }
     addCVEvent('mode','Running in browser demo — Electron not detected');
     addCVEvent('mode','All features available when running as desktop app');
     setCVStatus('cvs-whisper','error','Needs desktop');
@@ -450,5 +558,10 @@ setTimeout(() => {
     setCVStatus('cvs-cam','error','Needs desktop');
     setCVStatus('cvs-screen','error','Needs desktop');
     setCVStatus('cvs-ollama','error','Needs desktop');
+  } else {
+    // Probe webhook health from renderer (brain may still be starting)
+    fetch('http://localhost:9003/health').then(r => r.json()).then(j => {
+      setWebhookOnline(j.port || 9003, j.status);
+    }).catch(() => {});
   }
 }, 1200);

@@ -24,28 +24,56 @@ class WebhookHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # Suppress default logging
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-GitHub-Event, X-ASTRA-Signature")
+        self.end_headers()
+
     def do_GET(self):
-        if self.path == "/health":
-            self._respond(200, {"status": "ASTRA webhook engine online", "port": WEBHOOK_PORT})
+        path = urlparse(self.path).path
+        if path == "/health":
+            self._respond(200, {
+                "status": "ASTRA webhook engine online",
+                "port": WEBHOOK_PORT,
+                "endpoints": [
+                    "GET /health",
+                    "POST /github", "POST /stripe", "POST /discord",
+                    "POST /notion", "POST /vercel", "POST /trading",
+                    "POST /astra", "POST /custom/*",
+                ],
+            })
+        elif path == "/":
+            self._respond(200, {
+                "service": "ASTRA Webhooks",
+                "port": WEBHOOK_PORT,
+                "docs": "POST JSON to /github, /stripe, /discord, /notion, /vercel, /trading, /astra, or /custom/<name>",
+            })
         else:
-            self._respond(404, {"error": "Not found"})
+            self._respond(404, {"error": "Not found", "hint": "Use GET /health"})
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
 
         try:
-            payload = json.loads(body)
+            payload = json.loads(body) if body else {}
         except Exception:
             payload = {"raw": body.decode(errors="replace")}
 
         path = urlparse(self.path).path
         event = self._route(path, payload, dict(self.headers))
-        self._respond(200, {"received": True, "event": event})
+        self._respond(200, {"received": True, "event": event, "path": path})
 
         # Emit to brain
-        if self.server.event_cb:
-            self.server.event_cb({"type": "webhook_in", "path": path, "payload": payload, "event": event})
+        if getattr(self.server, "event_cb", None):
+            self.server.event_cb({
+                "type": "webhook_in",
+                "path": path,
+                "payload": payload,
+                "event": event,
+            })
 
     def _route(self, path: str, payload: dict, headers: dict) -> str:
         """Identify webhook source and return event name."""
@@ -53,42 +81,52 @@ class WebhookHandler(BaseHTTPRequestHandler):
             event = headers.get("X-GitHub-Event", "unknown")
             return f"github.{event}"
         elif path == "/stripe":
-            return f"stripe.{payload.get('type','event')}"
+            return f"stripe.{payload.get('type', 'event')}"
         elif path == "/discord":
             return "discord.message"
         elif path == "/notion":
             return "notion.update"
         elif path == "/vercel":
-            return f"vercel.{payload.get('type','deploy')}"
+            return f"vercel.{payload.get('type', 'deploy')}"
         elif path == "/trading":
-            return f"trading.alert"
+            return "trading.alert"
+        elif path == "/astra":
+            return "astra.command"
+        elif path.startswith("/custom"):
+            return f"custom{path.replace('/', '.')}"
         else:
-            return f"custom{path.replace('/','.')}"
+            return f"custom{path.replace('/', '.')}"
 
     def _respond(self, code: int, data: dict):
         body = json.dumps(data).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", len(body))
+        self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
 
 class ASTRAWebhookServer:
-    def __init__(self, event_cb=None):
+    def __init__(self, event_cb=None, port=None):
         self.event_cb = event_cb
+        self.port = int(port or WEBHOOK_PORT)
         self.server = None
         self.outgoing_queue = []
 
     def start(self):
-        self.server = HTTPServer(("0.0.0.0", WEBHOOK_PORT), WebhookHandler)
+        global WEBHOOK_PORT
+        WEBHOOK_PORT = self.port
+        self.server = HTTPServer(("0.0.0.0", self.port), WebhookHandler)
         self.server.event_cb = self.event_cb
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
         if self.event_cb:
-            self.event_cb({"type": "webhook_server_ready",
-                           "msg": f"Webhook engine online at http://localhost:{WEBHOOK_PORT}"})
+            self.event_cb({
+                "type": "webhook_server_ready",
+                "msg": f"Webhook engine online at http://localhost:{self.port}",
+                "port": self.port,
+            })
 
     def stop(self):
         if self.server:
