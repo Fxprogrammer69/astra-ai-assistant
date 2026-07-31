@@ -80,13 +80,13 @@ function applyHealth(data){
     el.textContent = label || (ok ? 'OK' : 'OFF');
     el.className = 'hc-status ' + (ok ? 'ok' : 'bad');
   };
-  set('h-cloud', s.cloud_llm, s.cloud_llm ? (s.cloud_provider || 'ready') : 'no key / credits');
+  set('h-cloud', s.cloud_llm, s.cloud_llm ? (s.cloud_provider || (s.claude ? 'claude' : 'ready')) : 'no key / credits');
   set('h-ollama', s.ollama);
   set('h-webhooks', s.webhooks, s.webhooks ? `:${data.webhook_port||9003}` : 'off');
   set('h-speech', s.speech);
-  set('h-vision', s.vision);
+  set('h-vision', s.vision, s.vision ? (s.cv_backend || 'ok') : 'off');
   set('h-agent', s.agent_tools, 'ready');
-  set('h-memory', s.memory, 'ready');
+  set('h-memory', s.memory, s.nlp ? 'nlp+mem' : 'ready');
   const m = document.getElementById('h-model');
   if(m){ m.textContent = data.model || '—'; m.className = 'hc-status ok'; }
   const ts = document.getElementById('health-ts');
@@ -494,36 +494,51 @@ function handleBrainEvent(raw){
     const pttInd = document.getElementById('ptt-ind');
     if(pttInd) pttInd.classList.remove('active');
     sendToASTRA(data.text, pendingLog);
+  } else if(type === 'nlp_analysis'){
+    updateIntentHUD(data.intent, data.confidence);
+    const tools = (data.suggested_tools || []).join(', ') || '—';
+    addCVEvent('nlp', `Intent: ${data.intent} (${Math.round((data.confidence||0)*100)}%) · tools: ${tools}`);
   } else if(type === 'cv_ready'){
     setIndicator('ind-cam', true);
     setIndicator('ind-gesture', true);
-    setCVStatus('cvs-mp', 'ok', 'Online');
-    addCVEvent('gesture', 'MediaPipe loaded — gesture detection active');
+    const backend = data.backend || 'mediapipe';
+    setCVStatus('cvs-mp', 'ok', backend === 'opencv' ? 'OpenCV' : 'MediaPipe');
+    addCVEvent('gesture', data.msg || `CV v2 ready (${backend})`);
   } else if(type === 'webcam_active'){
-    setCVStatus('cvs-cam', 'ok', 'Online');
-    addCVEvent('presence', 'Webcam active — presence tracking');
+    setCVStatus('cvs-cam', 'ok', data.camera != null ? `Cam ${data.camera}` : 'Online');
+    addCVEvent('presence', data.msg || 'Webcam active — presence tracking');
   } else if(type === 'gesture'){
     const g = data.gesture, action = data.action;
-    addCVEvent('gesture', `Gesture: ${g} → ${action}`);
+    addCVEvent('gesture', `Gesture: ${g} → ${action}${data.confidence != null ? ' · ' + Math.round(data.confidence*100) + '%' : ''}`);
     updateGestureHUD(g);
     handleGestureAction(action);
   } else if(type === 'presence'){
     const p = data.present;
     const el = document.getElementById('m-presence');
     const bar = document.getElementById('m-presence-bar');
-    if(el) el.textContent = p ? 'At desk' : 'Away';
-    if(bar) bar.style.width = p ? '100%' : '0%';
+    if(el){
+      const conf = data.confidence != null ? ` · ${Math.round(data.confidence*100)}%` : '';
+      el.textContent = p ? ('At desk' + conf) : 'Away';
+    }
+    if(bar) bar.style.width = p ? (data.confidence != null ? Math.round(data.confidence*100)+'%' : '100%') : '0%';
+    if(data.attention != null) updateAttention(data.attention);
     addCVEvent('presence', p ? 'User at desk' : 'User away');
+  } else if(type === 'attention'){
+    updateAttention(data.score);
   } else if(type === 'away_detected'){
     if(timerRunning){ clearInterval(timerInterval); timerRunning = false; appendMsg('dash-chat-log','astra','You stepped away — focus timer paused.'); }
+  } else if(type === 'screen_change'){
+    addCVEvent('screen', data.msg || 'Screen content changed');
+    setCVStatus('cvs-screen', 'ok', 'Change');
   } else if(type === 'screen_insight'){
     const bar = document.getElementById('insight-bar');
     const txt = document.getElementById('insight-text');
     if(bar && txt){ txt.textContent = data.text; bar.style.display = 'flex'; }
     setCVStatus('cvs-screen', 'ok', 'Online');
-    addCVEvent('mode', `Screen: ${data.text.substring(0,60)}...`);
+    addCVEvent('screen', `Screen: ${(data.text||'').substring(0,60)}...`);
   } else if(type === 'screen_watch_active'){
-    setCVStatus('cvs-screen', 'ok', 'Online');
+    setCVStatus('cvs-screen', 'ok', 'Watch');
+    addCVEvent('screen', data.msg || 'Screen awareness online');
   } else if(type === 'webhook_server_ready'){
     setWebhookOnline(data.port, data.msg);
   } else if(type === 'webhook_in'){
@@ -584,9 +599,31 @@ function handleGestureAction(action){
 function updateGestureHUD(gesture){
   const hud = document.getElementById('gesture-hud');
   const lbl = document.getElementById('gesture-label');
-  const icons = {'FIST':'✊','OPEN_HAND':'🖐','PEACE':'✌️','THUMBS_UP':'👍','POINTING_UP':'☝️','POINTING_DOWN':'👇'};
-  if(lbl) lbl.textContent = (icons[gesture]||'') + ' ' + gesture.replace('_',' ');
+  const icons = {'FIST':'✊','OPEN_HAND':'🖐','PEACE':'✌️','THUMBS_UP':'👍','POINTING_UP':'☝️','POINTING_DOWN':'👇','PINCH':'🤏','OK':'👌'};
+  if(lbl) lbl.textContent = (icons[gesture]||'') + ' ' + String(gesture||'').replace(/_/g,' ');
   if(hud){ hud.classList.add('active'); setTimeout(() => hud.classList.remove('active'), 2000); }
+}
+
+function updateIntentHUD(intent, confidence){
+  const hud = document.getElementById('intent-hud');
+  const lbl = document.getElementById('intent-label');
+  const pct = confidence != null ? ` ${Math.round(confidence*100)}%` : '';
+  if(lbl) lbl.textContent = 'intent: ' + (intent || '—') + pct;
+  if(hud){ hud.classList.add('active'); setTimeout(() => hud.classList.remove('active'), 2500); }
+}
+
+function updateAttention(score){
+  if(score == null || isNaN(score)) return;
+  const n = Math.max(0, Math.min(100, Math.round(Number(score) * 100)));
+  const el = document.getElementById('m-attention');
+  const bar = document.getElementById('m-attention-bar');
+  const focus = document.getElementById('m-focus');
+  const fbar = document.getElementById('m-focus-bar');
+  if(el) el.innerHTML = n + '<span>/100</span>';
+  if(bar) bar.style.width = n + '%';
+  // Blend attention into focus score display
+  if(focus) focus.innerHTML = n + '<span>/100</span>';
+  if(fbar) fbar.style.width = n + '%';
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

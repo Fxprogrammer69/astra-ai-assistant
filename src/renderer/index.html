@@ -70,17 +70,23 @@
           <h1 id="greeting">Good evening, Commander.</h1>
           <p class="sub" id="day-summary">Loading daily summary...</p>
         </div>
-        <div class="gesture-hud" id="gesture-hud" title="Last gesture">
-          <i class="ti ti-hand-stop"></i>
-          <span id="gesture-label">No gesture</span>
+        <div class="header-hud">
+          <div class="intent-hud" id="intent-hud" title="Last NLP intent">
+            <i class="ti ti-brain"></i>
+            <span id="intent-label">intent: —</span>
+          </div>
+          <div class="gesture-hud" id="gesture-hud" title="Last gesture">
+            <i class="ti ti-hand-stop"></i>
+            <span id="gesture-label">No gesture</span>
+          </div>
         </div>
       </div>
 
       <div class="hero-strip">
         <div class="hero-icon"><i class="ti ti-sparkles"></i></div>
         <div class="hero-text">
-          <h2>Agent + Grok + webhooks</h2>
-          <p>Tool loop · streaming chat · missions · memory · health · webhooks :9003. Add xAI credits for full Grok.</p>
+          <h2>NLP v2 · CV v2 · Agent</h2>
+          <p>Intent routing · multi-provider NLP · presence + attention · gestures · screen change-detect · webhooks :9003</p>
         </div>
       </div>
       <div class="tool-trace" id="tool-trace" style="display:none"></div>
@@ -107,9 +113,9 @@
       </div>
 
       <div class="metrics-row">
-        <div class="metric"><div class="metric-label">Focus Score</div><div class="metric-val" id="m-focus">87<span>/100</span></div><div class="mbar"><div class="mbar-fill" style="width:87%;background:#34d399"></div></div></div>
+        <div class="metric"><div class="metric-label">Attention</div><div class="metric-val" id="m-attention">—<span>/100</span></div><div class="mbar"><div class="mbar-fill" id="m-attention-bar" style="width:0%;background:#34d399"></div></div></div>
         <div class="metric"><div class="metric-label">Tasks Done</div><div class="metric-val" id="m-tasks">6<span>/9</span></div><div class="mbar"><div class="mbar-fill" style="width:66%"></div></div></div>
-        <div class="metric"><div class="metric-label">Deep Work</div><div class="metric-val">3h<span>42m</span></div><div class="mbar"><div class="mbar-fill" style="width:74%;background:#8b7cf6"></div></div></div>
+        <div class="metric"><div class="metric-label">Focus Score</div><div class="metric-val" id="m-focus">87<span>/100</span></div><div class="mbar"><div class="mbar-fill" id="m-focus-bar" style="width:87%;background:#8b7cf6"></div></div></div>
         <div class="metric"><div class="metric-label">Presence</div><div class="metric-val" id="m-presence" style="font-size:14px;padding-top:4px">Detecting...</div><div class="mbar"><div class="mbar-fill" id="m-presence-bar" style="width:0%;background:#38bdf8"></div></div></div>
       </div>
 
