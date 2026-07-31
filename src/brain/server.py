@@ -134,24 +134,29 @@ class NLPRouter:
         if mode == "local":
             return self._ollama(prompt)
 
+        # Explicit Claude mode
+        if mode == "claude":
+            if CONFIG.get("anthropic_key"):
+                self._init_anthropic()
+                try:
+                    return self._claude(prompt, image_b64)
+                except Exception as e:
+                    return f"[Claude error: {e}]"
+            return "[No ANTHROPIC_API_KEY set]"
+
         if mode in ("default", "cloud", "grok") or not mode:
-            if CONFIG.get("xai_key"):
+            if CONFIG.get("xai_key") and mode != "claude":
                 try:
                     return self._grok(prompt, image_b64)
                 except Exception as e:
-                    print(json.dumps({"type": "warn", "msg": f"Grok API failed, trying fallback: {e}"}), flush=True)
-            if CONFIG.get("anthropic_key") and self.anthropic:
+                    print(json.dumps({"type": "warn", "msg": f"Grok API failed, trying Claude: {e}"}), flush=True)
+            if CONFIG.get("anthropic_key"):
+                self._init_anthropic()
                 try:
                     return self._claude(prompt, image_b64)
                 except Exception as e:
                     print(json.dumps({"type": "warn", "msg": f"Claude failed, falling back to Ollama: {e}"}), flush=True)
             return self._ollama(prompt)
-
-        if mode == "claude" and self.anthropic:
-            try:
-                return self._claude(prompt, image_b64)
-            except Exception as e:
-                return f"[Claude error: {e}]"
 
         return self._ollama(prompt)
 
@@ -674,14 +679,17 @@ class ASTRABrain:
         threading.Thread(target=_later, daemon=True).start()
 
         cp = CONFIG.get("cloud_provider") or "none"
-        if cp == "grok":
+        if cp == "grok" and CONFIG.get("xai_key"):
             provider = "Grok"
-        elif cp == "openai":
+        elif cp == "openai" and CONFIG.get("xai_key"):
             provider = "OpenAI"
         elif CONFIG.get("anthropic_key"):
             provider = "Claude"
         else:
             provider = "Ollama/demo"
+        # Prefer showing Claude in badge when Anthropic key present and no working Grok path indicated
+        if CONFIG.get("anthropic_key") and not CONFIG.get("xai_key"):
+            provider = "Claude"
         model = CONFIG.get("xai_model") if CONFIG.get("xai_key") else CONFIG.get("ollama_model")
         if cp == "openai" and str(model).startswith("grok"):
             model = "gpt-4o"

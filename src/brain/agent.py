@@ -67,6 +67,7 @@ def run_agent_chat(
             emit(ev)
 
     key = config.get("xai_key") or ""
+    anthropic_key = config.get("anthropic_key") or ""
     base = (config.get("xai_base") or "https://api.x.ai/v1").rstrip("/")
     model = config.get("xai_model") or "grok-4.5"
     if config.get("cloud_provider") == "openai" and str(model).startswith("grok"):
@@ -94,10 +95,42 @@ def run_agent_chat(
                     _emit({"type": "chat_delta", "text": text[i : i + 48]})
             return text
 
-    if not key:
+    # Prefer Grok/OpenAI-compatible; if no xAI key, try Claude Messages API
+    if not key and anthropic_key and mode != "tools":
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=anthropic_key)
+            _emit({"type": "chat_start", "mode": "claude"})
+            resp = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=1024,
+                system=system,
+                messages=[{"role": "user", "content": user_content}],
+            )
+            text = resp.content[0].text if resp.content else ""
+            if stream and text:
+                for i in range(0, len(text), 40):
+                    _emit({"type": "chat_delta", "text": text[i : i + 40]})
+            return text or "[Empty Claude response]"
+        except Exception as e:
+            _emit({"type": "warn", "msg": f"Claude failed: {e}"})
+            # fall through to tools / offline messaging
+
+    if not key and not anthropic_key:
         text = (
             "Cloud LLM offline (no key or no credits). "
             "Try **Missions**, or chat mode **Local tools only** — e.g. “list desktop files”."
+        )
+        if stream:
+            for i in range(0, len(text), 48):
+                _emit({"type": "chat_delta", "text": text[i : i + 48]})
+        return text
+
+    if not key and anthropic_key:
+        # Claude already attempted above
+        text = (
+            f"Claude unavailable. Falling back to local tools.\n\n"
+            + demo_agent(prompt, emit=_emit)
         )
         if stream:
             for i in range(0, len(text), 48):
@@ -191,7 +224,25 @@ def run_agent_chat(
         return text
     except urllib.error.HTTPError as e:
         err = e.read().decode(errors="replace")[:400]
-        # Offline tools fallback
+        # Try Claude if Grok failed and Anthropic key exists
+        if anthropic_key:
+            try:
+                import anthropic
+                client = anthropic.Anthropic(api_key=anthropic_key)
+                _emit({"type": "warn", "msg": f"Grok HTTP {e.code} — trying Claude"})
+                resp = client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=1024,
+                    system=system,
+                    messages=[{"role": "user", "content": user_content}],
+                )
+                text = resp.content[0].text if resp.content else ""
+                if stream and text:
+                    for i in range(0, len(text), 40):
+                        _emit({"type": "chat_delta", "text": text[i : i + 40]})
+                return text or "[Empty Claude response]"
+            except Exception as ce:
+                _emit({"type": "warn", "msg": f"Claude also failed: {ce}"})
         text = (
             f"Cloud LLM error HTTP {e.code}: {err}\n\n"
             "Falling back to **local agent tools**:\n\n"
