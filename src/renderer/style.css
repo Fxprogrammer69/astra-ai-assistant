@@ -286,13 +286,18 @@ body{
 }
 .chip:hover{border-color:rgba(245,165,36,0.4);color:var(--accent);background:var(--accent-dim);}
 
-/* GESTURE HUD */
-.gesture-hud{
+/* HEADER HUD (intent + gesture) */
+.header-hud{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;}
+.gesture-hud,.intent-hud{
   display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;color:var(--muted);
   background:var(--panel);border:1px solid var(--border);padding:8px 14px;border-radius:999px;
 }
-.gesture-hud i{font-size:15px;}
+.gesture-hud i,.intent-hud i{font-size:15px;}
 .gesture-hud.active{color:var(--accent3);border-color:rgba(52,211,153,0.3);background:rgba(52,211,153,0.08);}
+.intent-hud.active{color:var(--accent2);border-color:rgba(139,124,246,0.35);background:rgba(139,124,246,0.1);}
+.cve-item.nlp{border-left-color:var(--accent2);}
+.cve-item.attention{border-left-color:#34d399;}
+.cve-item.screen{border-left-color:var(--cyan);}
 
 /* CV */
 .cv-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
