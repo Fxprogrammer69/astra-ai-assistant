@@ -31,6 +31,80 @@ function setView(el){
   if(target) target.classList.add('active');
   if(view === 'memory') loadMemory();
   if(view === 'webhooks') refreshWebhookLog();
+  if(view === 'missions') loadMissions();
+  if(view === 'health') requestHealth();
+}
+
+function loadMissions(){
+  if(isElectron) window.astra.sendToPython({ type: 'list_missions' });
+  else renderMissions([
+    {id:'system_scan',name:'System scan',desc:'Platform + Desktop list',icon:'radar-2'},
+    {id:'desktop_inventory',name:'Desktop inventory',desc:'List Desktop files',icon:'folder'},
+    {id:'focus_prep',name:'Focus prep',desc:'Deep-work checklist',icon:'target'},
+  ]);
+}
+
+function renderMissions(list){
+  const grid = document.getElementById('missions-grid');
+  if(!grid) return;
+  if(!list || !list.length){ grid.innerHTML = '<p class="sub">No missions</p>'; return; }
+  grid.innerHTML = list.map(m => `
+    <button type="button" class="mission-card" onclick="runMission('${m.id}')">
+      <i class="ti ti-${m.icon || 'rocket'}"></i>
+      <div class="mc-name">${m.name}</div>
+      <div class="mc-status">${m.desc || ''}</div>
+    </button>`).join('');
+}
+
+function runMission(id){
+  pendingLog = 'dash-chat-log';
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  const dashNav = document.querySelector('[data-view="dashboard"]');
+  if(dashNav) dashNav.classList.add('active');
+  document.getElementById('view-dashboard')?.classList.add('active');
+  appendMsg('dash-chat-log', 'user', `Run mission: ${id}`);
+  showTyping('dash-chat-log');
+  if(isElectron) window.astra.sendToPython({ type: 'mission', id });
+}
+
+function requestHealth(){
+  if(isElectron) window.astra.sendToPython({ type: 'health' });
+}
+
+function applyHealth(data){
+  const s = data.subsystems || {};
+  const set = (id, ok, label) => {
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.textContent = label || (ok ? 'OK' : 'OFF');
+    el.className = 'hc-status ' + (ok ? 'ok' : 'bad');
+  };
+  set('h-cloud', s.cloud_llm, s.cloud_llm ? (s.cloud_provider || 'ready') : 'no key / credits');
+  set('h-ollama', s.ollama);
+  set('h-webhooks', s.webhooks, s.webhooks ? `:${data.webhook_port||9003}` : 'off');
+  set('h-speech', s.speech);
+  set('h-vision', s.vision);
+  set('h-agent', s.agent_tools, 'ready');
+  set('h-memory', s.memory, 'ready');
+  const m = document.getElementById('h-model');
+  if(m){ m.textContent = data.model || '—'; m.className = 'hc-status ok'; }
+  const ts = document.getElementById('health-ts');
+  if(ts) ts.textContent = 'Last probe: ' + (data.ts || new Date().toISOString());
+}
+
+function addMemoryNote(kind){
+  const inp = document.getElementById('mem-input');
+  const text = (inp?.value || '').trim();
+  if(!text) return;
+  if(isElectron) window.astra.sendToPython({ type: 'memory_add', text, kind });
+  if(inp) inp.value = '';
+}
+
+function renderMemoryDump(data){
+  const el = document.getElementById('memory-dump');
+  if(!el) return;
+  el.textContent = JSON.stringify(data || {}, null, 2);
 }
 
 // ── Mode Activation ───────────────────────────────────────────────────────────
@@ -80,24 +154,71 @@ function showTyping(logId){
   log.scrollTop = log.scrollHeight;
 }
 
+let pendingLog = 'dash-chat-log';
+let streamBuf = '';
+let streamEl = null;
+
+function beginStream(logId){
+  const log = document.getElementById(logId);
+  if(!log) return;
+  const typing = log.querySelector('.typing-row');
+  if(typing) typing.remove();
+  streamBuf = '';
+  const div = document.createElement('div');
+  div.className = 'msg astra-msg stream-msg';
+  const now = new Date();
+  const ts = pad(now.getHours())+':'+pad(now.getMinutes())+':'+pad(now.getSeconds());
+  div.innerHTML = `<div class="msg-who">ASTRA // ${ts}</div><div class="msg-body stream-body"></div>`;
+  log.appendChild(div);
+  streamEl = div.querySelector('.stream-body');
+  log.scrollTop = log.scrollHeight;
+}
+
+function appendStreamDelta(text){
+  if(!streamEl) beginStream(pendingLog);
+  streamBuf += text;
+  if(streamEl){
+    streamEl.textContent = streamBuf;
+    const log = streamEl.closest('.chat-log');
+    if(log) log.scrollTop = log.scrollHeight;
+  }
+}
+
+function endStream(finalText){
+  if(finalText && streamEl) streamEl.textContent = finalText;
+  else if(finalText && !streamEl) appendMsg(pendingLog, 'astra', finalText);
+  streamEl = null;
+  streamBuf = '';
+}
+
+function pushToolTrace(name, status, preview){
+  const el = document.getElementById('tool-trace');
+  if(!el) return;
+  el.style.display = 'flex';
+  const row = document.createElement('div');
+  row.className = 'tool-row ' + (status || '');
+  row.innerHTML = `<i class="ti ti-tool"></i><b>${name||'tool'}</b><span>${status||''}</span><code>${(preview||'').toString().slice(0,120)}</code>`;
+  el.insertBefore(row, el.firstChild);
+  while(el.children.length > 8) el.lastChild.remove();
+}
+
 async function sendToASTRA(text, logId, mode = 'default'){
   if(!text.trim()) return;
   appendMsg(logId, 'user', text);
   showTyping(logId);
+  streamEl = null;
+  streamBuf = '';
 
   if(isElectron){
-    window.astra.sendToPython({ type:'chat', text, mode });
-    // Response comes via python-event listener
+    const agent = mode !== 'chat_only';
+    window.astra.sendToPython({ type:'chat', text, mode, agent });
     pendingLog = logId;
   } else {
-    // Demo mode — pattern matching fallback
     await new Promise(r => setTimeout(r, 700));
     const reply = demoReply(text);
     appendMsg(logId, 'astra', reply);
   }
 }
-
-let pendingLog = 'dash-chat-log';
 
 function sendDashChat(){
   const inp = document.getElementById('dash-input');
@@ -334,10 +455,33 @@ function handleBrainEvent(raw){
     if(pb) pb.textContent = (data.provider || 'Grok') + (data.model ? ' · ' + data.model : '');
     if(data.has_xai){
       setIndicator('ind-ollama', true);
-      setCVStatus('cvs-ollama', 'ok', 'Grok');
+      setCVStatus('cvs-ollama', 'ok', data.provider || 'Cloud');
     }
+    if(isElectron){
+      window.astra.sendToPython({ type: 'list_missions' });
+      window.astra.sendToPython({ type: 'health' });
+    }
+  } else if(type === 'chat_start'){
+    // typing already shown
+  } else if(type === 'chat_delta'){
+    appendStreamDelta(data.text || '');
   } else if(type === 'chat_response'){
-    appendMsg(pendingLog, 'astra', data.text);
+    endStream(data.text);
+    // remove leftover typing
+    const log = document.getElementById(pendingLog);
+    if(log){ const t = log.querySelector('.typing-row'); if(t) t.remove(); }
+  } else if(type === 'tool_call'){
+    pushToolTrace(data.name, data.status || 'run', JSON.stringify(data.args||{}));
+  } else if(type === 'tool_result'){
+    pushToolTrace(data.name, data.ok ? 'ok' : 'err', data.preview || '');
+  } else if(type === 'missions_list'){
+    renderMissions(data.missions || []);
+  } else if(type === 'health'){
+    applyHealth(data);
+  } else if(type === 'memory_dump'){
+    renderMemoryDump(data.data);
+  } else if(type === 'memory_search_results'){
+    renderMemoryDump({ hits: data.hits });
   } else if(type === 'speech_ready'){
     setIndicator('ind-speech', true);
     setCVStatus('cvs-whisper', 'ok', 'Online');
@@ -510,9 +654,8 @@ async function loadMemory(){
   const el = document.getElementById('memory-dump');
   if(!el) return;
   if(!isElectron){ el.textContent = 'Connect ASTRA desktop app to view memory.'; return; }
-  // Memory is stored in brain/memory.json
   el.textContent = 'Loading...';
-  window.astra.sendToPython({type:'ping'});
+  window.astra.sendToPython({ type: 'memory_get' });
 }
 
 // ── Push-to-talk ──────────────────────────────────────────────────────────────

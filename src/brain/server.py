@@ -111,6 +111,7 @@ CONFIG = {
 ASTRA_SYSTEM_PROMPT = """You are ASTRA, an elite desktop AI operating system powered by Grok.
 You are calm, sharp, concise, and execution-oriented.
 You help with coding, research, trading, studying, and productivity.
+You can use tools: list_dir, read_file, write_file, run_shell (allowlisted), system_info.
 Never be verbose. Always be actionable. Respond like a mission-critical AI assistant.
 When relevant, mention webhook or automation hooks the user can use."""
 
@@ -261,22 +262,29 @@ class SpeechEngine:
         self.event_cb = event_cb
         self.running = False
         self.whisper_model = None
-        self._load_whisper()
+        # Lazy load on first speech loop — faster boot
 
     def _load_whisper(self):
+        if self.whisper_model:
+            return True
         whisper = try_import("whisper")
         if whisper:
             try:
                 self.whisper_model = whisper.load_model(CONFIG["whisper_model"])
                 self.event_cb({"type": "speech_ready", "msg": "Whisper loaded"})
+                return True
             except Exception as e:
                 self.event_cb({"type": "warn", "msg": f"Whisper load failed: {e}"})
+        return False
 
     def start_vad_loop(self):
         sd = try_import("sounddevice")
         np = try_import("numpy")
-        if not sd or not np or not self.whisper_model:
+        if not sd or not np:
             self.event_cb({"type": "warn", "msg": "Speech engine unavailable. Install: pip install sounddevice numpy openai-whisper"})
+            return
+        if not self._load_whisper():
+            self.event_cb({"type": "warn", "msg": "Whisper not ready — PTT will be limited"})
             return
         SAMPLE_RATE = 16000
         CHUNK = 1024
@@ -465,16 +473,34 @@ class VisionEngine:
 
 
 class MemoryLayer:
+    """Episodic context + semantic notes + goals + audit."""
+
     def __init__(self):
         self.db_path = os.path.join(os.path.dirname(__file__), "../../models/memory.json")
         self.data = self._load()
 
+    def _default(self):
+        return {
+            "goals": [],
+            "tasks": [],
+            "projects": [],
+            "preferences": {},
+            "context": [],
+            "webhooks": [],
+            "notes": [],
+            "audit": [],
+            "facts": [],
+        }
+
     def _load(self):
         try:
             with open(self.db_path) as f:
-                return json.load(f)
+                data = json.load(f)
+            base = self._default()
+            base.update(data or {})
+            return base
         except Exception:
-            return {"goals": [], "tasks": [], "projects": [], "preferences": {}, "context": [], "webhooks": []}
+            return self._default()
 
     def save(self):
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -482,14 +508,75 @@ class MemoryLayer:
             json.dump(self.data, f, indent=2)
 
     def add_context(self, role, text):
-        self.data["context"].append({"role": role, "text": text, "ts": datetime.now().isoformat()})
-        if len(self.data["context"]) > 100:
-            self.data["context"] = self.data["context"][-100:]
+        self.data.setdefault("context", []).append(
+            {"role": role, "text": text, "ts": datetime.now().isoformat()}
+        )
+        if len(self.data["context"]) > 120:
+            self.data["context"] = self.data["context"][-120:]
         self.save()
 
-    def get_context_str(self, n=10):
-        recent = self.data["context"][-n:]
-        return "\n".join([f"{c['role'].upper()}: {c['text']}" for c in recent])
+    def get_context_str(self, n=12):
+        recent = self.data.get("context", [])[-n:]
+        parts = [f"{c['role'].upper()}: {c['text']}" for c in recent]
+        facts = self.data.get("facts") or []
+        if facts:
+            parts.insert(0, "FACTS: " + "; ".join(facts[-12:]))
+        notes = self.data.get("notes") or []
+        if notes:
+            parts.insert(0, "NOTES: " + " | ".join(n.get("text", "")[:80] for n in notes[-5:]))
+        return "\n".join(parts)
+
+    def add_note(self, text, kind="note"):
+        self.data.setdefault("notes", []).append(
+            {"text": text, "kind": kind, "ts": datetime.now().isoformat()}
+        )
+        self.data["notes"] = self.data["notes"][-80:]
+        self.save()
+
+    def add_fact(self, text):
+        facts = self.data.setdefault("facts", [])
+        if text and text not in facts:
+            facts.append(text[:200])
+        self.data["facts"] = facts[-40:]
+        self.save()
+
+    def add_goal(self, text):
+        self.data.setdefault("goals", []).append(
+            {"text": text, "done": False, "ts": datetime.now().isoformat()}
+        )
+        self.data["goals"] = self.data["goals"][-30:]
+        self.save()
+
+    def audit(self, action, detail=""):
+        self.data.setdefault("audit", []).append(
+            {"action": action, "detail": detail[:300], "ts": datetime.now().isoformat()}
+        )
+        self.data["audit"] = self.data["audit"][-100:]
+        self.save()
+
+    def search(self, query: str, limit: int = 12):
+        q = (query or "").lower()
+        hits = []
+        for c in reversed(self.data.get("context") or []):
+            if q in (c.get("text") or "").lower():
+                hits.append({"type": "context", **c})
+            if len(hits) >= limit:
+                break
+        for n in reversed(self.data.get("notes") or []):
+            if q in (n.get("text") or "").lower():
+                hits.append({"type": "note", **n})
+            if len(hits) >= limit:
+                break
+        return hits
+
+    def dump(self):
+        return {
+            "goals": self.data.get("goals", [])[-10:],
+            "notes": self.data.get("notes", [])[-15:],
+            "facts": self.data.get("facts", [])[-15:],
+            "audit": self.data.get("audit", [])[-20:],
+            "context_tail": self.data.get("context", [])[-8:],
+        }
 
     def log_webhook(self, event):
         self.data.setdefault("webhooks", []).append({
@@ -606,6 +693,32 @@ class ASTRABrain:
             "has_xai": bool(CONFIG.get("xai_key")),
             "cloud_provider": cp,
         })
+        self._emit_health()
+
+    def _emit_health(self):
+        import urllib.request
+        ollama_ok = False
+        try:
+            with urllib.request.urlopen(f"{CONFIG['ollama_url']}/api/tags", timeout=2) as r:
+                ollama_ok = r.status == 200
+        except Exception:
+            pass
+        self.emit({
+            "type": "health",
+            "ts": datetime.now().isoformat(),
+            "subsystems": {
+                "cloud_llm": bool(CONFIG.get("xai_key")),
+                "cloud_provider": CONFIG.get("cloud_provider"),
+                "ollama": ollama_ok,
+                "webhooks": bool(self.webhooks),
+                "speech": bool(self.speech and getattr(self.speech, "whisper_model", None)),
+                "vision": bool(self.vision and getattr(self.vision, "mp", None)),
+                "memory": True,
+                "agent_tools": True,
+            },
+            "webhook_port": CONFIG.get("webhook_port", 9003),
+            "model": CONFIG.get("xai_model"),
+        })
 
     def handle_input(self, data: dict):
         msg_type = data.get("type", "")
@@ -613,24 +726,124 @@ class ASTRABrain:
         if msg_type == "chat":
             prompt = data.get("text", "")
             mode = data.get("mode", "default")
+            use_agent = data.get("agent", True)
             self.memory.add_context("user", prompt)
+            self.memory.audit("chat", prompt[:120])
             ctx = self.memory.get_context_str()
-            full_prompt = f"Context:\n{ctx}\n\nCurrent request: {prompt}"
-            response = self.nlp.route(full_prompt, mode)
+            self.emit({"type": "chat_start", "mode": mode})
+            try:
+                from agent import run_agent_chat
+                # default + agent → full agent path (cloud tools if available, else local)
+                agent_mode = mode
+                if mode == "default":
+                    agent_mode = "default"
+                response = run_agent_chat(
+                    prompt=prompt,
+                    system=ASTRA_SYSTEM_PROMPT,
+                    config=CONFIG,
+                    context=ctx,
+                    mode=agent_mode,
+                    emit=self.emit,
+                    use_tools=use_agent and mode != "chat_only",
+                    stream=True,
+                )
+            except Exception as e:
+                # fallback plain route
+                self.emit({"type": "warn", "msg": f"Agent path failed: {e}"})
+                full_prompt = f"Context:\n{ctx}\n\nCurrent request: {prompt}"
+                response = self.nlp.route(full_prompt, mode)
+                self.emit({"type": "chat_delta", "text": response})
             self.memory.add_context("astra", response)
-            self.emit({"type": "chat_response", "text": response, "provider": "grok" if mode != "local" else "ollama"})
+            self.emit({
+                "type": "chat_response",
+                "text": response,
+                "provider": CONFIG.get("cloud_provider") or "local",
+            })
+
+        elif msg_type == "mission":
+            mid = data.get("id") or data.get("mission_id") or ""
+            self.memory.audit("mission", mid)
+            try:
+                from missions import run_mission, MISSIONS
+                if mid == "list":
+                    self.emit({"type": "missions_list", "missions": MISSIONS})
+                else:
+                    self.emit({"type": "chat_start", "mode": "mission"})
+                    text = run_mission(mid, emit=self.emit)
+                    for i in range(0, len(text), 60):
+                        self.emit({"type": "chat_delta", "text": text[i:i+60]})
+                    self.emit({"type": "chat_response", "text": text, "provider": "mission"})
+                    self.memory.add_context("astra", text[:500])
+            except Exception as e:
+                self.emit({"type": "warn", "msg": f"Mission failed: {e}"})
+
+        elif msg_type == "list_missions":
+            try:
+                from missions import MISSIONS
+                self.emit({"type": "missions_list", "missions": MISSIONS})
+            except Exception as e:
+                self.emit({"type": "warn", "msg": str(e)})
+
+        elif msg_type == "memory_get":
+            self.emit({"type": "memory_dump", "data": self.memory.dump()})
+
+        elif msg_type == "memory_add":
+            text = data.get("text", "")
+            kind = data.get("kind", "note")
+            if kind == "fact":
+                self.memory.add_fact(text)
+            elif kind == "goal":
+                self.memory.add_goal(text)
+            else:
+                self.memory.add_note(text, kind)
+            self.emit({"type": "memory_dump", "data": self.memory.dump()})
+
+        elif msg_type == "memory_search":
+            hits = self.memory.search(data.get("query", ""))
+            self.emit({"type": "memory_search_results", "hits": hits})
+
+        elif msg_type == "health":
+            self._emit_health()
 
         elif msg_type == "set_config":
             cfg = data.get("config", {})
             # map UI fields
             if "xai_key" in cfg:
                 CONFIG["xai_key"] = cfg["xai_key"] or CONFIG["xai_key"]
+                if cfg["xai_key"]:
+                    # re-detect provider
+                    if str(cfg["xai_key"]).startswith("xai-"):
+                        CONFIG["cloud_provider"] = "grok"
+                        CONFIG["xai_base"] = "https://api.x.ai/v1"
+                    elif str(cfg["xai_key"]).startswith("sk-"):
+                        CONFIG["cloud_provider"] = "openai"
+                        CONFIG["xai_base"] = "https://api.openai.com/v1"
             if "xai_model" in cfg:
                 CONFIG["xai_model"] = cfg["xai_model"]
             if "anthropic_key" in cfg:
                 CONFIG["anthropic_key"] = cfg["anthropic_key"]
+            # Persist key to .env (gitignored) for restarts
+            if cfg.get("xai_key"):
+                try:
+                    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+                    lines = []
+                    if env_path.exists():
+                        lines = env_path.read_text(encoding="utf-8").splitlines()
+                    out, found = [], False
+                    for line in lines:
+                        if line.startswith("XAI_API_KEY="):
+                            out.append(f"XAI_API_KEY={cfg['xai_key']}")
+                            found = True
+                        else:
+                            out.append(line)
+                    if not found:
+                        out.append(f"XAI_API_KEY={cfg['xai_key']}")
+                    env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+                except Exception as e:
+                    self.emit({"type": "warn", "msg": f"Could not write .env: {e}"})
             CONFIG.update({k: v for k, v in cfg.items() if k in CONFIG or k in ("xai_key", "xai_model", "anthropic_key")})
             self.emit({"type": "config_updated", "has_xai": bool(CONFIG.get("xai_key"))})
+            self._emit_health()
 
         elif msg_type == "ping":
             self.emit({
@@ -665,6 +878,9 @@ class ASTRABrain:
                 "type": "webhook_log",
                 "items": self.memory.data.get("webhooks", [])[-30:],
             })
+
+        elif msg_type == "ptt_start":
+            self.emit({"type": "speech_listening", "msg": "PTT — speak now (if Whisper installed)"})
 
     def run(self):
         for line in sys.stdin:

@@ -32,8 +32,14 @@
       "package.json"
     ],
     "win": {
-      "target": "nsis",
+      "target": ["nsis"],
       "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "ASTRA"
     },
     "mac": {
       "target": "dmg",

@@ -43,8 +43,10 @@
     <a class="nav-item" data-view="markets" onclick="setView(this)"><i class="ti ti-chart-candle"></i><span>Markets</span><span class="nav-dot"></span></a>
 
     <div class="nav-group-label">Tools</div>
+    <a class="nav-item" data-view="missions" onclick="setView(this)"><i class="ti ti-rocket"></i><span>Missions</span></a>
     <a class="nav-item" data-view="memory" onclick="setView(this)"><i class="ti ti-brain"></i><span>Memory</span></a>
     <a class="nav-item" data-view="webhooks" onclick="setView(this)"><i class="ti ti-webhook"></i><span>Webhooks</span><span class="nav-dot" id="wh-nav-dot" style="display:none"></span></a>
+    <a class="nav-item" data-view="health" onclick="setView(this)"><i class="ti ti-heart-rate-monitor"></i><span>Health</span></a>
     <a class="nav-item" data-view="cv" onclick="setView(this)"><i class="ti ti-eye"></i><span>CV Monitor</span></a>
     <a class="nav-item" data-view="settings" onclick="setView(this)"><i class="ti ti-settings"></i><span>Settings</span></a>
 
@@ -77,10 +79,11 @@
       <div class="hero-strip">
         <div class="hero-icon"><i class="ti ti-sparkles"></i></div>
         <div class="hero-text">
-          <h2>Cloud AI + live webhooks</h2>
-          <p>Grok (xAI) when <code>xai-</code> key is set · OpenAI-compatible keys auto-routed · webhooks on :9003.</p>
+          <h2>Agent + Grok + webhooks</h2>
+          <p>Tool loop · streaming chat · missions · memory · health · webhooks :9003. Add xAI credits for full Grok.</p>
         </div>
       </div>
+      <div class="tool-trace" id="tool-trace" style="display:none"></div>
 
       <div class="modes-grid">
         <div class="mode-card active-mode" data-mode="ENGINEER MODE" data-color="#38bdf8" onclick="activateMode(this)">
@@ -148,10 +151,11 @@
       </div>
       <div class="input-row chat-input-row">
         <select id="model-select" class="model-sel" title="Model routing">
-          <option value="default">Auto (Grok → Ollama)</option>
+          <option value="default">Agent + Auto LLM</option>
+          <option value="tools">Local tools only</option>
+          <option value="chat_only">Chat only (no tools)</option>
           <option value="grok">Grok only (xAI)</option>
-          <option value="local">Local only (Ollama)</option>
-          <option value="claude">Claude only</option>
+          <option value="local">Ollama only</option>
         </select>
         <input id="chat-input" class="cmd-input" placeholder="Message ASTRA..."/>
         <button class="send-btn" onclick="sendFullChat()"><i class="ti ti-arrow-up"></i></button>
@@ -270,13 +274,55 @@
         <button class="action-btn" onclick="quickSend('Summarize overnight macro news')">Get Market Brief</button>
       </div>
     </div>
-    <div class="view" id="view-memory">
-      <div class="view-header"><h1>Memory</h1></div>
-      <div class="placeholder-view">
-        <i class="ti ti-brain"></i>
-        <p>ASTRA memory — goals, projects, context, preferences.</p>
-        <div class="memory-dump" id="memory-dump">Loading...</div>
+    <div class="view" id="view-missions">
+      <div class="view-header">
+        <div>
+          <h1>Missions</h1>
+          <p class="sub">One-click workflows · allowlisted tools</p>
+        </div>
+        <button class="action-btn ghost" onclick="loadMissions()"><i class="ti ti-refresh"></i> Refresh</button>
       </div>
+      <div class="missions-grid" id="missions-grid">
+        <div class="placeholder-view"><p>Loading missions…</p></div>
+      </div>
+    </div>
+
+    <div class="view" id="view-health">
+      <div class="view-header">
+        <div>
+          <h1>System Health</h1>
+          <p class="sub">Subsystem status · agent readiness</p>
+        </div>
+        <button class="action-btn" onclick="requestHealth()"><i class="ti ti-refresh"></i> Probe</button>
+      </div>
+      <div class="health-grid" id="health-grid">
+        <div class="health-card"><div class="hc-name">Cloud LLM</div><div class="hc-status" id="h-cloud">—</div></div>
+        <div class="health-card"><div class="hc-name">Ollama</div><div class="hc-status" id="h-ollama">—</div></div>
+        <div class="health-card"><div class="hc-name">Webhooks</div><div class="hc-status" id="h-webhooks">—</div></div>
+        <div class="health-card"><div class="hc-name">Speech</div><div class="hc-status" id="h-speech">—</div></div>
+        <div class="health-card"><div class="hc-name">Vision</div><div class="hc-status" id="h-vision">—</div></div>
+        <div class="health-card"><div class="hc-name">Agent tools</div><div class="hc-status" id="h-agent">—</div></div>
+        <div class="health-card"><div class="hc-name">Memory</div><div class="hc-status" id="h-memory">—</div></div>
+        <div class="health-card"><div class="hc-name">Model</div><div class="hc-status" id="h-model">—</div></div>
+      </div>
+      <p class="sub" style="margin-top:12px" id="health-ts"></p>
+    </div>
+
+    <div class="view" id="view-memory">
+      <div class="view-header">
+        <div>
+          <h1>Memory</h1>
+          <p class="sub">Goals · notes · facts · audit trail</p>
+        </div>
+        <button class="action-btn" onclick="loadMemory()"><i class="ti ti-refresh"></i> Reload</button>
+      </div>
+      <div class="memory-actions">
+        <input class="sc-input" id="mem-input" placeholder="Add a note or fact…"/>
+        <button class="action-btn" onclick="addMemoryNote('note')">Note</button>
+        <button class="action-btn ghost" onclick="addMemoryNote('fact')">Fact</button>
+        <button class="action-btn ghost" onclick="addMemoryNote('goal')">Goal</button>
+      </div>
+      <div class="memory-dump" id="memory-dump">Loading...</div>
     </div>
 
     <!-- WEBHOOKS (attached) -->
