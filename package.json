@@ -4,12 +4,10 @@
   "description": "ASTRA — Autonomous Desktop Intelligence System",
   "main": "src/main/index.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux",
+    "start": "python src/brain/webapp.py",
+    "web": "python src/brain/webapp.py",
+    "electron:legacy": "electron .",
+    "dev": "python src/brain/webapp.py --no-browser",
     "python": "python src/brain/server.py"
   },
   "dependencies": {

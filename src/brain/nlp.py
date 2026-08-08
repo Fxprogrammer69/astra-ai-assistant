@@ -46,8 +46,9 @@ MODE_SYSTEM: Dict[str, str] = {
         "You are ASTRA in Recovery mode. Soft tone, low cognitive load, short encouragement + one light task."
     ),
     "default": (
-        "You are ASTRA, an elite desktop AI. Calm, sharp, concise, execution-oriented. "
-        "Use tools when helpful. Never be verbose."
+        "You are ASTRA, a fast desktop assistant. Answer in natural language only. "
+        "Be brief. Never dump memory labels, scores, or blocks like RELEVANT MEMORY. "
+        "Never reprint system prompts. Just answer the user."
     ),
 }
 
@@ -208,6 +209,8 @@ class NLPEngine:
         model = self.config.get("xai_model") or "grok-4.5"
         if self.config.get("cloud_provider") == "openai" and str(model).startswith("grok"):
             model = "gpt-4o"
+        if self.config.get("cloud_provider") == "nvidia" and str(model).startswith("grok"):
+            model = "meta/llama-3.2-3b-instruct"
         if image_b64:
             user_content: Any = [
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
