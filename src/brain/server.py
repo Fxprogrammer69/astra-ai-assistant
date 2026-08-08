@@ -25,12 +25,13 @@ def _load_dotenv():
     if not env_path.exists():
         return
     try:
-        for line in env_path.read_text(encoding="utf-8").splitlines():
+        # utf-8-sig strips BOM so keys like NVIDIA_NIM_API_KEY still load
+        for line in env_path.read_text(encoding="utf-8-sig").splitlines():
             t = line.strip()
             if not t or t.startswith("#") or "=" not in t:
                 continue
             k, v = t.split("=", 1)
-            k, v = k.strip(), v.strip().strip('"').strip("'")
+            k, v = k.strip().lstrip("\ufeff"), v.strip().strip('"').strip("'")
             if k and k not in os.environ:
                 os.environ[k] = v
     except Exception:
@@ -49,20 +50,45 @@ def try_import(name):
 # ── Config ────────────────────────────────────────────────────────────────────
 def _detect_cloud():
     """Resolve cloud LLM endpoint from env keys.
-    True xAI keys (xai-…) → Grok on api.x.ai.
-    OpenAI-style keys (sk-…) → OpenAI-compatible chat (user-supplied).
+    NVIDIA NIM (nvapi-… / NVIDIA_NIM_API_KEY) → integrate.api.nvidia.com
+    True xAI keys (xai-…) → Grok on api.x.ai
+    OpenAI-style keys (sk-…) → OpenAI-compatible chat
     """
+    nvidia = (
+        os.environ.get("NVIDIA_NIM_API_KEY")
+        or os.environ.get("NVIDIA_API_KEY")
+        or ""
+    ).strip()
     raw = (
-        os.environ.get("XAI_API_KEY")
+        nvidia
+        or os.environ.get("XAI_API_KEY")
         or os.environ.get("GROK_API_KEY")
         or os.environ.get("OPENAI_API_KEY")
         or ""
     ).strip()
-    base = (os.environ.get("XAI_BASE_URL") or "").rstrip("/")
-    model = os.environ.get("XAI_MODEL") or os.environ.get("OPENAI_MODEL") or ""
+    base = (
+        os.environ.get("NVIDIA_BASE_URL")
+        or os.environ.get("XAI_BASE_URL")
+        or ""
+    ).rstrip("/")
+    model = (
+        os.environ.get("NVIDIA_MODEL")
+        or os.environ.get("XAI_MODEL")
+        or os.environ.get("OPENAI_MODEL")
+        or ""
+    )
 
     if not raw:
         return {"key": "", "base": "https://api.x.ai/v1", "model": "grok-4.5", "provider": "none"}
+
+    # NVIDIA NIM (OpenAI-compatible)
+    if raw.startswith("nvapi-") or bool(nvidia) or "nvidia.com" in base:
+        return {
+            "key": raw,
+            "base": base or "https://integrate.api.nvidia.com/v1",
+            "model": model or "meta/llama-3.2-3b-instruct",
+            "provider": "nvidia",
+        }
 
     if raw.startswith("xai-") or "x.ai" in base:
         return {
@@ -98,170 +124,30 @@ CONFIG = {
     "xai_model": _cloud["model"],
     "cloud_provider": _cloud["provider"],
     "anthropic_key": os.environ.get("ANTHROPIC_API_KEY", ""),
+    "claude_model": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-20250514"),
     "ollama_url": os.environ.get("OLLAMA_URL", "http://localhost:11434"),
-    "ollama_model": os.environ.get("OLLAMA_MODEL", "llama3.1:8b"),
+    "ollama_model": os.environ.get("OLLAMA_MODEL", "llama3.2:3b"),
     "whisper_model": os.environ.get("WHISPER_MODEL", "tiny"),
     "vad_threshold": 0.5,
-    "screenshot_interval": int(os.environ.get("SCREENSHOT_INTERVAL", "10")),
-    "gesture_confidence": 0.75,
+    "screenshot_interval": int(os.environ.get("SCREENSHOT_INTERVAL", "12")),
+    "gesture_confidence": float(os.environ.get("GESTURE_CONFIDENCE", "0.7")),
     "webhook_port": int(os.environ.get("WEBHOOK_PORT", "9003")),
+    # Speed defaults — local-first auto route
+    "max_tokens": int(os.environ.get("ASTRA_MAX_TOKENS", "256")),
+    "temperature": float(os.environ.get("ASTRA_TEMPERATURE", "0.4")),
+    "fast_mode": os.environ.get("ASTRA_FAST_MODE", "1").strip().lower() in ("1", "true", "yes"),
+    "route": (os.environ.get("ASTRA_ROUTE") or "auto").strip().lower(),  # auto|local|cloud
 }
 
-# ── System prompt ─────────────────────────────────────────────────────────────
-ASTRA_SYSTEM_PROMPT = """You are ASTRA, an elite desktop AI operating system powered by Grok.
-You are calm, sharp, concise, and execution-oriented.
-You help with coding, research, trading, studying, and productivity.
-You can use tools: list_dir, read_file, write_file, run_shell (allowlisted), system_info.
-Never be verbose. Always be actionable. Respond like a mission-critical AI assistant.
-When relevant, mention webhook or automation hooks the user can use."""
+# ── NLP + CV engines (v2 modules) ─────────────────────────────────────────────
+from nlp import NLPEngine, build_system_prompt, classify_intent  # noqa: E402
+from cv import VisionEngineV2  # noqa: E402
+from rag import RAGEngine  # noqa: E402
+from mcp_client import MCPManager  # noqa: E402
 
-# ── NLP Router (Grok primary) ─────────────────────────────────────────────────
-class NLPRouter:
-    def __init__(self):
-        self.anthropic = None
-        self._init_anthropic()
+ASTRA_SYSTEM_PROMPT = build_system_prompt("default", "chat")
 
-    def _init_anthropic(self):
-        try:
-            import anthropic
-            if CONFIG.get("anthropic_key"):
-                self.anthropic = anthropic.Anthropic(api_key=CONFIG["anthropic_key"])
-        except ImportError:
-            pass
-
-    def route(self, prompt: str, mode: str = "default", image_b64: str = None) -> str:
-        """Route: local → Ollama; cloud/default → Grok → Claude → Ollama."""
-        if mode == "local":
-            return self._ollama(prompt)
-
-        # Explicit Claude mode
-        if mode == "claude":
-            if CONFIG.get("anthropic_key"):
-                self._init_anthropic()
-                try:
-                    return self._claude(prompt, image_b64)
-                except Exception as e:
-                    return f"[Claude error: {e}]"
-            return "[No ANTHROPIC_API_KEY set]"
-
-        if mode in ("default", "cloud", "grok") or not mode:
-            if CONFIG.get("xai_key") and mode != "claude":
-                try:
-                    return self._grok(prompt, image_b64)
-                except Exception as e:
-                    print(json.dumps({"type": "warn", "msg": f"Grok API failed, trying Claude: {e}"}), flush=True)
-            if CONFIG.get("anthropic_key"):
-                self._init_anthropic()
-                try:
-                    return self._claude(prompt, image_b64)
-                except Exception as e:
-                    print(json.dumps({"type": "warn", "msg": f"Claude failed, falling back to Ollama: {e}"}), flush=True)
-            return self._ollama(prompt)
-
-        return self._ollama(prompt)
-
-    def _grok(self, prompt: str, image_b64: str = None) -> str:
-        """Cloud LLM via OpenAI-compatible chat completions (Grok xAI or OpenAI)."""
-        import urllib.request
-        import urllib.error
-
-        if not CONFIG.get("xai_key"):
-            raise RuntimeError("XAI_API_KEY / OPENAI_API_KEY not set")
-
-        content = []
-        if image_b64:
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{image_b64}"},
-            })
-            content.append({"type": "text", "text": prompt})
-            user_content = content
-        else:
-            user_content = prompt
-
-        model = CONFIG.get("xai_model") or "grok-4.5"
-        # If key is OpenAI-style but model is still grok-*, swap to gpt-4o
-        if CONFIG.get("cloud_provider") == "openai" and str(model).startswith("grok"):
-            model = "gpt-4o"
-
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": ASTRA_SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": 0.7,
-            "max_tokens": 1024,
-        }
-        body = json.dumps(payload).encode()
-        base = CONFIG["xai_base"].rstrip("/")
-        req = urllib.request.Request(
-            f"{base}/chat/completions",
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {CONFIG['xai_key']}",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as r:
-                data = json.loads(r.read().decode())
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode(errors="replace")[:400]
-            raise RuntimeError(f"HTTP {e.code}: {err_body}") from e
-
-        choices = data.get("choices") or []
-        if not choices:
-            raise RuntimeError(f"Empty cloud response: {str(data)[:200]}")
-        msg = choices[0].get("message") or {}
-        text = msg.get("content") or ""
-        if not text:
-            raise RuntimeError("Cloud LLM returned empty content")
-        return text
-
-    def _claude(self, prompt: str, image_b64: str = None) -> str:
-        if not self.anthropic:
-            return self._ollama(prompt)
-        msgs = []
-        if image_b64:
-            msgs.append({"role": "user", "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image_b64}},
-                {"type": "text", "text": prompt},
-            ]})
-        else:
-            msgs.append({"role": "user", "content": prompt})
-        resp = self.anthropic.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1024,
-            system=ASTRA_SYSTEM_PROMPT,
-            messages=msgs,
-        )
-        return resp.content[0].text
-
-    def _ollama(self, prompt: str) -> str:
-        try:
-            import urllib.request
-            payload = json.dumps({
-                "model": CONFIG["ollama_model"],
-                "prompt": f"{ASTRA_SYSTEM_PROMPT}\n\nUser: {prompt}\nASTRA:",
-                "stream": False,
-            }).encode()
-            req = urllib.request.Request(
-                f"{CONFIG['ollama_url']}/api/generate",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(req, timeout=30) as r:
-                data = json.loads(r.read())
-                return data.get("response", "No response from Ollama.")
-        except Exception as e:
-            return (
-                f"[No cloud/local model available: {e}. "
-                f"Set XAI_API_KEY for Grok, or run: ollama pull {CONFIG['ollama_model']}]"
-            )
-
-# ── Speech / Vision (unchanged core) ──────────────────────────────────────────
+# ── Speech ────────────────────────────────────────────────────────────────────
 class SpeechEngine:
     def __init__(self, event_cb):
         self.event_cb = event_cb
@@ -332,146 +218,6 @@ class SpeechEngine:
                 self.event_cb({"type": "speech_transcript", "text": text})
         except Exception as e:
             self.event_cb({"type": "warn", "msg": f"Transcription error: {e}"})
-
-    def stop(self):
-        self.running = False
-
-
-class VisionEngine:
-    GESTURES = {
-        "FIST": "gesture_focus_lock",
-        "OPEN_HAND": "gesture_mode_switch",
-        "PEACE": "gesture_deep_work",
-        "THUMBS_UP": "gesture_confirm",
-        "POINTING_UP": "gesture_scroll_up",
-        "POINTING_DOWN": "gesture_scroll_down",
-    }
-
-    def __init__(self, event_cb):
-        self.event_cb = event_cb
-        self.running = False
-        self.mp = None
-        self.mp_hands = None
-        self.mp_face = None
-        self._load_mediapipe()
-
-    def _load_mediapipe(self):
-        mp = try_import("mediapipe")
-        if not mp:
-            return
-        try:
-            if not hasattr(mp, "solutions"):
-                self.event_cb({"type": "warn", "msg": "MediaPipe install incomplete (no solutions). Reinstall: pip install mediapipe"})
-                return
-            self.mp = mp
-            self.mp_hands = mp.solutions.hands.Hands(
-                static_image_mode=False,
-                max_num_hands=1,
-                min_detection_confidence=CONFIG["gesture_confidence"],
-                min_tracking_confidence=0.5,
-            )
-            self.mp_face = mp.solutions.face_detection.FaceDetection(
-                model_selection=0, min_detection_confidence=0.6
-            )
-            self.event_cb({"type": "cv_ready", "msg": "MediaPipe loaded — CV online"})
-        except Exception as e:
-            self.mp = None
-            self.event_cb({"type": "warn", "msg": f"MediaPipe init failed: {e}"})
-
-    def start_webcam_loop(self):
-        cv2 = try_import("cv2")
-        np = try_import("numpy")
-        if not cv2 or not np or not self.mp:
-            self.event_cb({"type": "warn", "msg": "CV unavailable. Install: pip install mediapipe opencv-python"})
-            return
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            self.event_cb({"type": "warn", "msg": "Webcam not found"})
-            return
-        self.running = True
-        self.event_cb({"type": "webcam_active", "msg": "Webcam online — presence + gesture detection active"})
-        last_gesture = None
-        gesture_hold = 0
-        presence_state = False
-        while self.running:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            face_results = self.mp_face.process(rgb)
-            face_detected = bool(face_results.detections)
-            if face_detected != presence_state:
-                presence_state = face_detected
-                self.event_cb({"type": "presence", "present": presence_state})
-                if not face_detected:
-                    self.event_cb({"type": "away_detected", "msg": "User away — pausing focus timer"})
-            hand_results = self.mp_hands.process(rgb)
-            if hand_results.multi_hand_landmarks:
-                for hand_lm in hand_results.multi_hand_landmarks:
-                    gesture = self._classify_gesture(hand_lm.landmark)
-                    if gesture:
-                        if gesture == last_gesture:
-                            gesture_hold += 1
-                            if gesture_hold == 5:
-                                action = self.GESTURES.get(gesture)
-                                if action:
-                                    self.event_cb({"type": "gesture", "gesture": gesture, "action": action})
-                        else:
-                            last_gesture = gesture
-                            gesture_hold = 0
-            else:
-                last_gesture = None
-                gesture_hold = 0
-            time.sleep(0.033)
-        cap.release()
-
-    def _classify_gesture(self, landmarks):
-        lm = landmarks
-
-        def tip_up(tip, pip):
-            return lm[tip].y < lm[pip].y
-
-        index_up = tip_up(8, 6)
-        middle_up = tip_up(12, 10)
-        ring_up = tip_up(16, 14)
-        pinky_up = tip_up(20, 18)
-        thumb_up = lm[4].y < lm[3].y
-        fingers_up = sum([index_up, middle_up, ring_up, pinky_up])
-        if fingers_up == 0 and not thumb_up:
-            return "FIST"
-        if fingers_up == 4 and thumb_up:
-            return "OPEN_HAND"
-        if index_up and middle_up and not ring_up and not pinky_up:
-            return "PEACE"
-        if thumb_up and not index_up and fingers_up == 0:
-            return "THUMBS_UP"
-        if index_up and not middle_up and not ring_up and not pinky_up:
-            return "POINTING_UP" if lm[8].y < lm[5].y else "POINTING_DOWN"
-        return None
-
-    def start_screen_loop(self, nlp_router):
-        pil = try_import("PIL")
-        if not pil:
-            self.event_cb({"type": "warn", "msg": "Screen awareness unavailable. Install: pip install Pillow"})
-            return
-        import PIL.ImageGrab as ImageGrab
-        import io
-        self.event_cb({"type": "screen_watch_active", "msg": "Screen awareness online"})
-        while self.running:
-            time.sleep(CONFIG["screenshot_interval"])
-            try:
-                screenshot = ImageGrab.grab()
-                screenshot = screenshot.resize((1280, 720))
-                buf = io.BytesIO()
-                screenshot.save(buf, format="PNG")
-                b64 = base64.b64encode(buf.getvalue()).decode()
-                response = nlp_router.route(
-                    "Analyze this screenshot. What is the user working on? Any suggestions? Be brief — 1-2 sentences.",
-                    image_b64=b64,
-                )
-                self.event_cb({"type": "screen_insight", "text": response})
-            except Exception:
-                pass
 
     def stop(self):
         self.running = False
@@ -595,22 +341,41 @@ class MemoryLayer:
 # ── Main Brain ────────────────────────────────────────────────────────────────
 class ASTRABrain:
     def __init__(self):
-        self.nlp = NLPRouter()
+        self.nlp = NLPEngine(CONFIG, emit=self.emit)
         self.memory = MemoryLayer()
+        self.rag = RAGEngine(emit=self.emit)
+        self.mcp = MCPManager(emit=self.emit)
+        self._whisper_model = None
         self.webhooks = None
         # Webhooks first — always available even if CV/speech fail
         self._start_webhooks()
-        try:
-            self.speech = SpeechEngine(self.emit)
-        except Exception as e:
+        # Skip speech/vision objects entirely in fast mode (boot + stability)
+        if CONFIG.get("fast_mode"):
             self.speech = None
-            self.emit({"type": "warn", "msg": f"Speech engine init failed: {e}"})
-        try:
-            self.vision = VisionEngine(self.emit)
-        except Exception as e:
             self.vision = None
-            self.emit({"type": "warn", "msg": f"Vision engine init failed: {e}"})
+            self.emit({"type": "info", "msg": "Fast mode: CV/speech backends deferred (use UI mic → WAV STT)"})
+        else:
+            try:
+                self.speech = SpeechEngine(self.emit)
+            except Exception as e:
+                self.speech = None
+                self.emit({"type": "warn", "msg": f"Speech engine init failed: {e}"})
+            try:
+                self.vision = VisionEngineV2(self.emit, config=CONFIG)
+            except Exception as e:
+                self.vision = None
+                self.emit({"type": "warn", "msg": f"Vision engine init failed: {e}"})
         self._start_threads()
+        # Surface RAG stats + start enabled MCP servers
+        try:
+            self.emit({"type": "rag_stats", **self.rag.stats()})
+        except Exception:
+            pass
+        try:
+            self.mcp.start_enabled()
+            self.emit({"type": "mcp_status", **self.mcp.status()})
+        except Exception as e:
+            self.emit({"type": "warn", "msg": f"MCP start: {e}"})
 
     def emit(self, event: dict):
         print(json.dumps(event), flush=True)
@@ -661,25 +426,45 @@ class ASTRABrain:
                     threading.Thread(target=_reply, daemon=True).start()
 
     def _start_threads(self):
-        # Defer heavy CV/speech so chat + webhooks come up fast
+        # CV/webcam and speech native libs often crash (0xC0000005) on Windows.
+        # Keep chat/LLM solid by default; opt in via env if needed.
+        enable_speech = os.environ.get("ASTRA_ENABLE_SPEECH", "0").strip().lower() in ("1", "true", "yes")
+        enable_cv = os.environ.get("ASTRA_ENABLE_CV", "0").strip().lower() in ("1", "true", "yes")
+
         def _later():
-            time.sleep(2)
-            if self.speech:
+            time.sleep(1.5)
+            if enable_speech and self.speech:
                 try:
                     threading.Thread(target=self.speech.start_vad_loop, daemon=True).start()
                 except Exception as e:
                     self.emit({"type": "warn", "msg": f"Speech loop failed: {e}"})
-            if self.vision:
+            elif self.speech:
+                self.emit({"type": "info", "msg": "Speech idle (set ASTRA_ENABLE_SPEECH=1 to enable)"})
+            if enable_cv and self.vision:
                 try:
                     self.vision.running = True
                     threading.Thread(target=self.vision.start_webcam_loop, daemon=True).start()
-                    threading.Thread(target=self.vision.start_screen_loop, args=(self.nlp,), daemon=True).start()
+
+                    def _nlp_screen(prompt, image_b64=None):
+                        return self.nlp.complete(
+                            prompt, mode="default", image_b64=image_b64, prefer="auto"
+                        )
+
+                    threading.Thread(
+                        target=self.vision.start_screen_loop,
+                        args=(_nlp_screen,),
+                        daemon=True,
+                    ).start()
                 except Exception as e:
                     self.emit({"type": "warn", "msg": f"Vision loop failed: {e}"})
+            elif self.vision:
+                self.emit({"type": "info", "msg": "Vision idle (set ASTRA_ENABLE_CV=1 to enable)"})
         threading.Thread(target=_later, daemon=True).start()
 
         cp = CONFIG.get("cloud_provider") or "none"
-        if cp == "grok" and CONFIG.get("xai_key"):
+        if cp == "nvidia" and CONFIG.get("xai_key"):
+            provider = "NVIDIA NIM"
+        elif cp == "grok" and CONFIG.get("xai_key"):
             provider = "Grok"
         elif cp == "openai" and CONFIG.get("xai_key"):
             provider = "OpenAI"
@@ -687,19 +472,23 @@ class ASTRABrain:
             provider = "Claude"
         else:
             provider = "Ollama/demo"
-        # Prefer showing Claude in badge when Anthropic key present and no working Grok path indicated
         if CONFIG.get("anthropic_key") and not CONFIG.get("xai_key"):
             provider = "Claude"
         model = CONFIG.get("xai_model") if CONFIG.get("xai_key") else CONFIG.get("ollama_model")
         if cp == "openai" and str(model).startswith("grok"):
             model = "gpt-4o"
+        cv_backend = getattr(self.vision, "backend", "none") if self.vision else "none"
         self.emit({
             "type": "brain_ready",
-            "msg": f"ASTRA Brain online. Primary LLM: {provider}",
+            "msg": f"ASTRA Brain online. NLP v2 + CV v2. Primary LLM: {provider}",
             "provider": provider,
             "model": model,
             "has_xai": bool(CONFIG.get("xai_key")),
+            "has_claude": bool(CONFIG.get("anthropic_key")),
             "cloud_provider": cp,
+            "cv_backend": cv_backend,
+            "nlp_version": 2,
+            "cv_version": 2,
         })
         self._emit_health()
 
@@ -711,16 +500,23 @@ class ASTRABrain:
                 ollama_ok = r.status == 200
         except Exception:
             pass
+        cv_ok = bool(
+            self.vision
+            and getattr(self.vision, "backend", "none") not in ("none", "", None)
+        )
         self.emit({
             "type": "health",
             "ts": datetime.now().isoformat(),
             "subsystems": {
-                "cloud_llm": bool(CONFIG.get("xai_key")),
+                "cloud_llm": bool(CONFIG.get("xai_key") or CONFIG.get("anthropic_key")),
                 "cloud_provider": CONFIG.get("cloud_provider"),
+                "claude": bool(CONFIG.get("anthropic_key")),
                 "ollama": ollama_ok,
                 "webhooks": bool(self.webhooks),
                 "speech": bool(self.speech and getattr(self.speech, "whisper_model", None)),
-                "vision": bool(self.vision and getattr(self.vision, "mp", None)),
+                "vision": cv_ok,
+                "cv_backend": getattr(self.vision, "backend", "none") if self.vision else "none",
+                "nlp": True,
                 "memory": True,
                 "agent_tools": True,
             },
@@ -734,38 +530,129 @@ class ASTRABrain:
         if msg_type == "chat":
             prompt = data.get("text", "")
             mode = data.get("mode", "default")
-            use_agent = data.get("agent", True)
+            use_agent = data.get("agent", False)  # default off for speed
+            source = data.get("source") or "astra"
+            t0 = time.time()
+
+            # Persist user turn into episodic + RAG (always track)
             self.memory.add_context("user", prompt)
             self.memory.audit("chat", prompt[:120])
-            ctx = self.memory.get_context_str()
-            self.emit({"type": "chat_start", "mode": mode})
+            self.rag.add_turn("user", prompt, source=source)
+
+            # Fast intent (rules only — no LLM)
+            analysis = self.nlp.analyze(
+                prompt,
+                mode=mode if mode not in ("local", "claude", "grok", "tools", "chat_only") else "default",
+            )
+            intent = analysis.get("intent") or "chat"
+
+            # RAG: skip for tiny greetings; never put raw memory into the user turn
+            # (small local models echo "RELEVANT MEMORY" otherwise)
+            pl = (prompt or "").strip().lower()
+            is_greeting = pl in ("hi", "hey", "hello", "yo", "sup", "hola", "ok", "okay", "thanks", "thank you")
+            hits = [] if is_greeting else self.rag.retrieve(prompt, k=3, min_score=0.18)
+            # Drop junk / self-echo memories
+            hits = [
+                h for h in hits
+                if h.get("text")
+                and "RELEVANT MEMORY" not in (h.get("text") or "")
+                and "RECENT:" not in (h.get("text") or "")
+                and len((h.get("text") or "").strip()) > 2
+            ]
+            self.emit({"type": "rag_hits", "hits": hits, "stats": self.rag.stats()})
+
+            mem_bits = [self.rag.system_addon()]
+            if hits:
+                mem_bits.append(
+                    "Silent background facts (never quote or dump these; answer the user only):\n"
+                    + "\n".join(f"- ({h.get('source')}) {h.get('text')[:160]}" for h in hits)
+                )
+            # Only last 2 clean turns of recent chat (not the whole polluted history)
+            recent_clean = []
+            for c in (self.memory.data.get("context") or [])[-8:]:
+                t = (c.get("text") or "").strip()
+                if not t or "RELEVANT MEMORY" in t or "Falling back to" in t or "Cloud LLM error" in t:
+                    continue
+                if len(t) > 400:
+                    t = t[:400] + "…"
+                recent_clean.append(f"{c.get('role','?').upper()}: {t}")
+            if recent_clean and not is_greeting:
+                mem_bits.append("Last turns:\n" + "\n".join(recent_clean[-4:]))
+
+            system = build_system_prompt(
+                mode if mode in (
+                    "ENGINEER MODE", "STUDENT MODE", "FOUNDER MODE",
+                    "FOCUS LOCK", "TRADING MODE", "RECOVERY MODE", "default",
+                ) else "default",
+                intent,
+                extra="\n".join(mem_bits)
+                + "\nReply in plain natural language only. Never print memory dumps, scores, or labels like RELEVANT MEMORY.",
+            )
+            # User message is ONLY the user's text — no context prefix
+            ctx = ""
+
+            # Only use tools when user clearly wants agent work
+            force_tools = intent == "agent_tools" or mode in ("tools", "agent")
+            agent_mode = "tools" if force_tools else ("chat_only" if mode == "default" else mode)
+            if mode in ("tools", "agent", "local", "claude", "grok", "chat_only"):
+                agent_mode = mode
+
+            self.emit({
+                "type": "chat_start",
+                "mode": mode,
+                "intent": intent,
+                "model": CONFIG.get("xai_model"),
+            })
             try:
                 from agent import run_agent_chat
-                # default + agent → full agent path (cloud tools if available, else local)
-                agent_mode = mode
-                if mode == "default":
-                    agent_mode = "default"
                 response = run_agent_chat(
                     prompt=prompt,
-                    system=ASTRA_SYSTEM_PROMPT,
+                    system=system,
                     config=CONFIG,
                     context=ctx,
                     mode=agent_mode,
                     emit=self.emit,
-                    use_tools=use_agent and mode != "chat_only",
+                    use_tools=bool(use_agent and force_tools),
                     stream=True,
                 )
             except Exception as e:
-                # fallback plain route
                 self.emit({"type": "warn", "msg": f"Agent path failed: {e}"})
-                full_prompt = f"Context:\n{ctx}\n\nCurrent request: {prompt}"
-                response = self.nlp.route(full_prompt, mode)
+                response = self.nlp.complete(
+                    prompt, mode=mode if mode not in ("local", "claude", "grok") else "default",
+                    context="", prefer="auto" if mode == "default" else mode,
+                )
                 self.emit({"type": "chat_delta", "text": response})
-            self.memory.add_context("astra", response)
+
+            # Sanitize model echo bugs
+            response = (response or "").strip()
+            if response.startswith("RELEVANT MEMORY") or response.startswith("RECENT:") or "RELEVANT MEMORY (RAG)" in response[:80]:
+                # Model echoed prompt — give a clean short reply instead of storing garbage
+                response = "Hey — I'm here. What do you need?"
+                self.emit({"type": "chat_delta", "text": response})
+
+            # Track assistant + continual learning (skip garbage)
+            if response and "RELEVANT MEMORY" not in response:
+                self.memory.add_context("astra", response)
+                self.rag.add_turn("assistant", response, source=source)
+                try:
+                    self.rag.learn_from_exchange(prompt, response, source=source)
+                    self.rag.flush()
+                except Exception as le:
+                    self.emit({"type": "warn", "msg": f"Learn step: {le}"})
+
+            ms = int((time.time() - t0) * 1000)
+            used_provider = CONFIG.pop("_last_provider", None) or CONFIG.get("cloud_provider") or "local"
+            used_model = CONFIG.pop("_last_model", None) or CONFIG.get("xai_model")
+            used_ms = CONFIG.pop("_last_ms", None) or ms
             self.emit({
                 "type": "chat_response",
                 "text": response,
-                "provider": CONFIG.get("cloud_provider") or "local",
+                "provider": used_provider,
+                "intent": intent,
+                "ms": used_ms,
+                "model": used_model,
+                "rag_hits": len(hits),
+                "route": CONFIG.get("route") or "auto",
             })
 
         elif msg_type == "mission":
@@ -819,11 +706,17 @@ class ASTRABrain:
             if "xai_key" in cfg:
                 CONFIG["xai_key"] = cfg["xai_key"] or CONFIG["xai_key"]
                 if cfg["xai_key"]:
-                    # re-detect provider
-                    if str(cfg["xai_key"]).startswith("xai-"):
+                    # re-detect provider from key prefix
+                    k = str(cfg["xai_key"])
+                    if k.startswith("nvapi-"):
+                        CONFIG["cloud_provider"] = "nvidia"
+                        CONFIG["xai_base"] = "https://integrate.api.nvidia.com/v1"
+                        if not CONFIG.get("xai_model") or str(CONFIG.get("xai_model", "")).startswith("grok"):
+                            CONFIG["xai_model"] = "meta/llama-3.2-3b-instruct"
+                    elif k.startswith("xai-"):
                         CONFIG["cloud_provider"] = "grok"
                         CONFIG["xai_base"] = "https://api.x.ai/v1"
-                    elif str(cfg["xai_key"]).startswith("sk-"):
+                    elif k.startswith("sk-"):
                         CONFIG["cloud_provider"] = "openai"
                         CONFIG["xai_base"] = "https://api.openai.com/v1"
             if "xai_model" in cfg:
@@ -890,6 +783,163 @@ class ASTRABrain:
         elif msg_type == "ptt_start":
             self.emit({"type": "speech_listening", "msg": "PTT — speak now (if Whisper installed)"})
 
+        elif msg_type == "rag_stats":
+            self.emit({"type": "rag_stats", **self.rag.stats()})
+
+        elif msg_type == "rag_search":
+            q = data.get("query") or ""
+            hits = self.rag.retrieve(q, k=int(data.get("k") or 8))
+            self.emit({"type": "rag_hits", "hits": hits, "query": q})
+
+        elif msg_type == "rag_import_text":
+            try:
+                n = self.rag.import_text_blob(data.get("text") or "", source=data.get("source") or "paste")
+                self.emit({"type": "rag_import", "count": n, "source": data.get("source") or "paste", **self.rag.stats()})
+            except Exception as e:
+                self.emit({"type": "error", "msg": f"RAG import failed: {e}"})
+
+        elif msg_type == "rag_import_file":
+            try:
+                n = self.rag.import_json_file(data.get("path") or "", source=data.get("source") or "import")
+                self.emit({"type": "rag_import", "count": n, "source": data.get("source") or "import", **self.rag.stats()})
+            except Exception as e:
+                self.emit({"type": "error", "msg": f"RAG file import failed: {e}"})
+
+        elif msg_type == "rag_add_fact":
+            self.rag.add_fact(data.get("text") or "", source=data.get("source") or "user")
+            self.emit({"type": "rag_stats", **self.rag.stats()})
+
+        elif msg_type == "learn_external":
+            # Track a conversation turn from another AI (user + their reply)
+            u = data.get("user") or ""
+            a = data.get("assistant") or ""
+            src = data.get("source") or "other_ai"
+            if u:
+                self.rag.add_turn("user", u, source=src)
+            if a:
+                self.rag.add_turn("assistant", a, source=src)
+            if u and a:
+                self.rag.learn_from_exchange(u, a, source=src)
+            self.rag.flush()
+            self.emit({"type": "rag_stats", **self.rag.stats(), "msg": "External conversation absorbed"})
+
+        elif msg_type == "transcribe":
+            # Renderer MediaRecorder WAV (base64) → local STT
+            self._handle_transcribe(data)
+
+        elif msg_type == "mcp_status":
+            try:
+                self.emit({"type": "mcp_status", **self.mcp.status()})
+            except Exception as e:
+                self.emit({"type": "error", "msg": str(e)})
+
+        elif msg_type == "mcp_reload":
+            try:
+                self.mcp.stop_all()
+                self.mcp.reload()
+                self.mcp.start_enabled()
+                self.emit({"type": "mcp_status", **self.mcp.status(), "msg": "MCP reloaded"})
+            except Exception as e:
+                self.emit({"type": "error", "msg": f"MCP reload failed: {e}"})
+
+        elif msg_type == "mcp_list_tools":
+            try:
+                tools = self.mcp.all_tools()
+                self.emit({"type": "mcp_tools", "tools": tools})
+            except Exception as e:
+                self.emit({"type": "error", "msg": str(e)})
+
+        elif msg_type == "mcp_call":
+            try:
+                result = self.mcp.call(
+                    data.get("tool") or data.get("name") or "",
+                    arguments=data.get("arguments") or data.get("args") or {},
+                    server=data.get("server"),
+                )
+                self.emit({"type": "mcp_result", "tool": data.get("tool"), "result": result})
+            except Exception as e:
+                self.emit({"type": "error", "msg": f"MCP call failed: {e}"})
+
+        elif msg_type == "memory_clear_chat":
+            # Wipe polluted recent chat context (keeps RAG facts)
+            self.memory.data["context"] = []
+            self.memory.save()
+            self.emit({"type": "memory_dump", "data": self.memory.dump(), "msg": "Chat context cleared"})
+
+    def _handle_transcribe(self, data: dict):
+        """Transcribe base64 audio from the renderer (WAV preferred)."""
+        import base64
+        import tempfile
+
+        b64 = data.get("audio_b64") or ""
+        if not b64:
+            self.emit({"type": "speech_error", "msg": "No audio received"})
+            return
+        try:
+            raw = base64.b64decode(b64)
+        except Exception as e:
+            self.emit({"type": "speech_error", "msg": f"Bad audio data: {e}"})
+            return
+
+        suffix = ".wav"
+        mime = (data.get("mime") or "audio/wav").lower()
+        if "webm" in mime:
+            suffix = ".webm"
+        elif "ogg" in mime:
+            suffix = ".ogg"
+        elif "mpeg" in mime or "mp3" in mime:
+            suffix = ".mp3"
+
+        path = None
+        text = ""
+        err = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
+                f.write(raw)
+                path = f.name
+
+            # 1) openai-whisper
+            try:
+                import whisper  # type: ignore
+                model_name = CONFIG.get("whisper_model") or "tiny"
+                if not hasattr(self, "_whisper_model") or self._whisper_model is None:
+                    self.emit({"type": "speech_listening", "msg": f"Loading Whisper {model_name}…"})
+                    self._whisper_model = whisper.load_model(model_name)
+                result = self._whisper_model.transcribe(path, language="en", fp16=False)
+                text = (result.get("text") or "").strip()
+            except Exception as e1:
+                err = f"whisper: {e1}"
+                # 2) SpeechRecognition + Google free web API (needs wav)
+                try:
+                    import speech_recognition as sr  # type: ignore
+                    r = sr.Recognizer()
+                    with sr.AudioFile(path) as source:
+                        audio = r.record(source)
+                    text = r.recognize_google(audio)
+                except Exception as e2:
+                    err = f"{err}; sr: {e2}"
+
+            if text:
+                self.emit({"type": "speech_transcript", "text": text})
+                self.emit({"type": "speech_ready", "msg": "Voice STT OK"})
+            else:
+                self.emit({
+                    "type": "speech_error",
+                    "msg": (
+                        "Could not transcribe. Install: pip install openai-whisper "
+                        "OR pip install SpeechRecognition  "
+                        f"({err or 'no engine'})"
+                    ),
+                })
+        except Exception as e:
+            self.emit({"type": "speech_error", "msg": str(e)})
+        finally:
+            if path:
+                try:
+                    os.unlink(path)
+                except Exception:
+                    pass
+
     def run(self):
         for line in sys.stdin:
             line = line.strip()
@@ -903,5 +953,10 @@ class ASTRABrain:
 
 
 if __name__ == "__main__":
-    brain = ASTRABrain()
-    brain.run()
+    try:
+        brain = ASTRABrain()
+        brain.run()
+    except Exception as e:
+        # Always emit something Electron can surface
+        print(json.dumps({"type": "error", "msg": f"Brain fatal: {e}"}), flush=True)
+        raise

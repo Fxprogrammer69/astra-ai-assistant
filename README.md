@@ -1,73 +1,85 @@
 # ASTRA AI Assistant
 
-Autonomous desktop intelligence: **Electron shell** + **Python brain** + **Grok (xAI)** + **agent tools** + **webhooks**.
+**Local desktop app on your PC only** (binds to `127.0.0.1` — not the public internet).
+
+Python brain + native desktop window (pywebview / WebView2) + local-first LLM (Ollama → NVIDIA) + RAG + MCP + voice.
 
 **Repo:** https://github.com/Fxprogrammer69/astra-ai-assistant
-
-## Features
-
-| Area | Capability |
-|------|------------|
-| Chat | Streaming replies, Grok / Ollama / local tools |
-| Agent | `list_dir`, `read_file`, `write_file`, allowlisted `run_shell`, `system_info` |
-| Missions | One-click workflows (system scan, desktop inventory, git status, focus prep, webhooks) |
-| Memory | Notes, facts, goals, audit trail (`models/memory.json`) |
-| Webhooks | HTTP server on **:9003** (`/health`, `/github`, `/astra`, …) |
-| Health | Subsystem probe panel |
-| CV / Speech | MediaPipe + Whisper when installed (lazy load) |
 
 ## Quick start (Windows)
 
 ```bat
 cd C:\Users\royru\OneDrive\Desktop\Astra-Desktop
-npm install
-npm start
+pip install -r requirements.txt
+ollama serve
+ollama pull llama3.2:3b
+ASTRA.bat
 ```
 
-Or double-click **ASTRA.bat** on the Desktop.
+Double-click **ASTRA.bat** → opens an **ASTRA desktop window** on your machine.
 
-### Grok (xAI)
+Nothing is hosted online. Traffic stays on localhost.
 
-1. Credits: https://console.x.ai  
-2. Put key in `.env` (gitignored):
+Or:
+
+```bash
+py -3 src/brain/desktop.py
+```
+
+### Ports (localhost only)
+
+| Port | Service |
+|------|---------|
+| **8787** | Local UI (served on this PC) |
+| **8788** | Local brain WebSocket |
+| **9003** | Local webhooks |
+
+## Features
+
+| Area | Capability |
+|------|------------|
+| Chat | Local-first: Ollama → NVIDIA NIM → Claude; streaming |
+| RAG | Every turn stored; retrieve + continual learning; import other AI chats |
+| Voice | Mic → WAV → Whisper / SpeechRecognition (real browser, not Electron) |
+| MCP | External connectors via `models/mcp.json` |
+| Agent | Allowlisted tools + missions |
+| Memory | Notes, facts, goals, training pairs for future fine-tunes |
+
+## Configuration (`.env`)
 
 ```env
-XAI_API_KEY=xai-...
-XAI_BASE_URL=https://api.x.ai/v1
-XAI_MODEL=grok-4.5
+# Local-first routing
+ASTRA_ROUTE=auto
+OLLAMA_MODEL=llama3.2:3b
+
+# Cloud fallback
+NVIDIA_NIM_API_KEY=nvapi-...
+NVIDIA_MODEL=meta/llama-3.2-3b-instruct
+
+ASTRA_FAST_MODE=1
+ASTRA_MAX_TOKENS=256
 ```
 
-Without credits, ASTRA still runs **local agent tools** and missions.
+## MCP connectors
 
-### Optional
+Edit `models/mcp.json`, set `"enabled": true`, add API keys in `env`, then **Settings → Reload MCP**.
+
+## Legacy Electron
+
+Electron is **optional / legacy**:
 
 ```bash
-pip install -r requirements.txt   # Whisper, MediaPipe, etc.
-ollama serve                      # local LLM fallback
+npm install
+npm run electron:legacy
 ```
 
-## Build installer
-
-```bash
-npm run build:win
-```
-
-Output: `dist/`
-
-## Keyboard
-
-| Shortcut | Action |
-|----------|--------|
-| Alt+Space | Push-to-talk |
-| Ctrl+Shift+A | Show / hide |
-| Ctrl+Shift+F | Focus Lock |
+Prefer web mode for voice reliability and lower RAM.
 
 ## Project layout
 
 ```
-src/main/       Electron main + preload
-src/renderer/   UI
-src/brain/      Python brain, agent, tools, missions
-src/webhooks/   HTTP webhook engine
-models/         memory.json (runtime)
+src/brain/     Python brain, webapp, RAG, MCP, agent
+src/renderer/  Browser UI (astra-bridge.js replaces Electron preload)
+models/        memory, rag, mcp.json, training pairs
+ASTRA.bat      Web launcher
 ```

@@ -2,6 +2,8 @@ node_modules/
 dist/
 .env
 models/memory.json
+models/rag/
+models/training/
 __pycache__/
 *.pyc
 *.pyo
