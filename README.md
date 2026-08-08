@@ -1,6 +1,8 @@
 # ASTRA AI Assistant
 
-**Web-first** desktop intelligence: **Python brain** + **browser UI** (no Electron required) + local-first LLM (Ollama → NVIDIA) + **RAG memory** + **MCP connectors** + voice STT.
+**Local desktop app on your PC only** (binds to `127.0.0.1` — not the public internet).
+
+Python brain + native desktop window (pywebview / WebView2) + local-first LLM (Ollama → NVIDIA) + RAG + MCP + voice.
 
 **Repo:** https://github.com/Fxprogrammer69/astra-ai-assistant
 
@@ -14,21 +16,23 @@ ollama pull llama3.2:3b
 ASTRA.bat
 ```
 
-Opens **http://127.0.0.1:8787** in your browser. Brain WebSocket: **ws://127.0.0.1:8788**.
+Double-click **ASTRA.bat** → opens an **ASTRA desktop window** on your machine.
+
+Nothing is hosted online. Traffic stays on localhost.
 
 Or:
 
 ```bash
-py -3 src/brain/webapp.py
+py -3 src/brain/desktop.py
 ```
 
-### Ports
+### Ports (localhost only)
 
 | Port | Service |
 |------|---------|
-| **8787** | HTTP UI |
-| **8788** | Brain WebSocket |
-| **9003** | Webhooks |
+| **8787** | Local UI (served on this PC) |
+| **8788** | Local brain WebSocket |
+| **9003** | Local webhooks |
 
 ## Features
 

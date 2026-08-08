@@ -4,10 +4,10 @@
   "description": "ASTRA — Autonomous Desktop Intelligence System",
   "main": "src/main/index.js",
   "scripts": {
-    "start": "python src/brain/webapp.py",
-    "web": "python src/brain/webapp.py",
+    "start": "python src/brain/desktop.py",
+    "desktop": "python src/brain/desktop.py",
+    "server-only": "python src/brain/webapp.py --no-browser",
     "electron:legacy": "electron .",
-    "dev": "python src/brain/webapp.py --no-browser",
     "python": "python src/brain/server.py"
   },
   "dependencies": {
