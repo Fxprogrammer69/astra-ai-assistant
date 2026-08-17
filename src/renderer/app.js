@@ -1,7 +1,9 @@
 // ASTRA Renderer — app.js
 // Handles UI logic, Python brain events, IPC, timer, gestures
 
+// Web (astra-bridge) or legacy Electron preload — both expose window.astra
 const isElectron = typeof window.astra !== 'undefined';
+const isWeb = !!(window.astra && window.astra.isWeb);
 
 // ── Clock ─────────────────────────────────────────────────────────────────────
 function pad(n){ return String(n).padStart(2,'0'); }
@@ -80,13 +82,13 @@ function applyHealth(data){
     el.textContent = label || (ok ? 'OK' : 'OFF');
     el.className = 'hc-status ' + (ok ? 'ok' : 'bad');
   };
-  set('h-cloud', s.cloud_llm, s.cloud_llm ? (s.cloud_provider || 'ready') : 'no key / credits');
+  set('h-cloud', s.cloud_llm, s.cloud_llm ? (s.cloud_provider || (s.claude ? 'claude' : 'ready')) : 'no key / credits');
   set('h-ollama', s.ollama);
   set('h-webhooks', s.webhooks, s.webhooks ? `:${data.webhook_port||9003}` : 'off');
   set('h-speech', s.speech);
-  set('h-vision', s.vision);
+  set('h-vision', s.vision, s.vision ? (s.cv_backend || 'ok') : 'off');
   set('h-agent', s.agent_tools, 'ready');
-  set('h-memory', s.memory, 'ready');
+  set('h-memory', s.memory, s.nlp ? 'nlp+mem' : 'ready');
   const m = document.getElementById('h-model');
   if(m){ m.textContent = data.model || '—'; m.className = 'hc-status ok'; }
   const ts = document.getElementById('health-ts');
@@ -109,23 +111,19 @@ function renderMemoryDump(data){
 
 // ── Mode Activation ───────────────────────────────────────────────────────────
 function activateMode(el){
-  document.querySelectorAll('.mode-card').forEach(c => {
-    c.classList.remove('active-mode');
-    c.querySelector('.mc-status').textContent = 'Standby';
-    c.style.setProperty('--c', c.dataset.color);
+  document.querySelectorAll('.mode-card, .mode-chip').forEach(c => {
+    c.classList.remove('active-mode', 'active');
+    const st = c.querySelector('.mc-status');
+    if(st) st.textContent = 'Standby';
   });
-  el.classList.add('active-mode');
-  el.querySelector('.mc-status').textContent = 'Active';
-  el.style.setProperty('--c', el.dataset.color);
+  el.classList.add('active-mode', 'active');
+  const st2 = el.querySelector('.mc-status');
+  if(st2) st2.textContent = 'Active';
   const modeName = el.dataset.mode;
   const badge = document.getElementById('mode-badge');
   if(badge) badge.textContent = modeName;
   addCVEvent('mode', `Mode switched → ${modeName}`);
-  appendMsg('dash-chat-log', 'astra', `${modeName} activated. Workspace optimized.`);
 }
-
-// Set color vars on load
-document.querySelectorAll('.mode-card').forEach(c => c.style.setProperty('--c', c.dataset.color));
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 function appendMsg(logId, role, text){
@@ -202,21 +200,118 @@ function pushToolTrace(name, status, preview){
   while(el.children.length > 8) el.lastChild.remove();
 }
 
+let chatWatchdog = null;
+
+function renderRagHits(hits){
+  const box = document.getElementById('rag-hits');
+  if(!box) return;
+  if(!hits || !hits.length){
+    box.innerHTML = '<div class="rag-empty">No strong memory match for this query.</div>';
+    return;
+  }
+  box.innerHTML = hits.map(h => `
+    <div class="rag-hit">
+      <div class="rh-meta">${h.source || 'astra'} · ${h.role || '?'} · score ${h.score ?? '—'}</div>
+      <div>${(h.text || '').replace(/</g,'&lt;').slice(0,220)}</div>
+    </div>`).join('');
+  const m = document.getElementById('m-rag');
+  if(m) m.textContent = String(hits.length);
+}
+
+function applyRagStats(s){
+  if(!s) return;
+  const line = document.getElementById('rag-stats-line');
+  if(line){
+    line.textContent = `idx ${s.index_size ?? '—'} · conv ${s.conversations ?? '—'} · train ${s.training_pairs ?? '—'} · facts ${s.facts ?? '—'}`;
+  }
+  const mem = document.getElementById('m-mem');
+  if(mem) mem.textContent = String(s.index_size ?? s.conversations ?? 0);
+  const tr = document.getElementById('m-train');
+  if(tr) tr.textContent = String(s.training_pairs ?? 0);
+}
+
+function renderMcpStatus(data){
+  const el = document.getElementById('mcp-status-box');
+  if(!el) return;
+  if(data.tools){
+    el.textContent = 'Tools: ' + (data.tools.map(t => t.qualified || t.name).join(', ') || 'none');
+    return;
+  }
+  const running = (data.running || []).map(s => `${s.name}(${(s.tools||[]).length} tools)`).join(', ') || 'none running';
+  const configured = (data.configured || []).map(s => `${s.name}${s.enabled ? '✓' : '○'}`).join(', ') || '—';
+  el.innerHTML = `<div><b>Running:</b> ${running}</div><div><b>Configured:</b> ${configured}</div>`
+    + (data.config_path ? `<div class="sub">${data.config_path}</div>` : '');
+}
+
+function reloadMcp(){
+  if(isElectron) window.astra.sendToPython({ type: 'mcp_reload' });
+}
+function listMcpTools(){
+  if(isElectron) window.astra.sendToPython({ type: 'mcp_list_tools' });
+}
+function clearChatContext(){
+  if(isElectron) window.astra.sendToPython({ type: 'memory_clear_chat' });
+  const log = document.getElementById('dash-chat-log');
+  if(log){
+    log.innerHTML = '<div class="msg astra-msg"><div class="msg-who">ASTRA</div><div class="msg-body">Chat context cleared. RAG facts kept. Say hi again.</div></div>';
+  }
+}
+
+function importRagText(){
+  const text = document.getElementById('rag-import-box')?.value || '';
+  const source = document.getElementById('rag-source')?.value || 'paste';
+  if(!text.trim()){ appendMsg('dash-chat-log','astra','Paste a conversation first.'); return; }
+  if(isElectron){
+    window.astra.sendToPython({ type: 'rag_import_text', text, source });
+    document.getElementById('rag-import-box').value = '';
+  } else {
+    appendMsg('dash-chat-log','astra','Import needs the desktop app brain.');
+  }
+}
+
+function addRagFact(){
+  const text = document.getElementById('rag-fact-input')?.value || '';
+  if(!text.trim()) return;
+  if(isElectron){
+    window.astra.sendToPython({ type: 'rag_add_fact', text, source: 'user' });
+    document.getElementById('rag-fact-input').value = '';
+    appendMsg('dash-chat-log','astra','Fact saved into long-term memory.');
+  }
+}
+
 async function sendToASTRA(text, logId, mode = 'default'){
   if(!text.trim()) return;
   appendMsg(logId, 'user', text);
   showTyping(logId);
   streamEl = null;
   streamBuf = '';
+  pendingLog = logId;
+  if(window.AstraJarvis) AstraJarvis.onChatStart();
 
   if(isElectron){
-    const agent = mode !== 'chat_only';
-    window.astra.sendToPython({ type:'chat', text, mode, agent });
-    pendingLog = logId;
+    // Fast default: no tool loop unless mode forces it
+    const agent = mode === 'tools' || mode === 'agent';
+    window.astra.sendToPython({ type:'chat', text, mode, agent, source: 'astra' });
+    // If brain dies mid-chat, unstick the "thinking" UI after 45s
+    if(chatWatchdog) clearTimeout(chatWatchdog);
+    chatWatchdog = setTimeout(() => {
+      const log = document.getElementById(logId);
+      if(!log) return;
+      const typing = log.querySelector('.typing-row');
+      if(typing || streamEl){
+        if(typing) typing.remove();
+        if(streamEl) endStream(streamBuf || null);
+        if(!streamBuf){
+          appendMsg(logId, 'astra', 'No response from brain (timeout). Check status bar — brain may have crashed and is restarting.');
+        }
+        if(window.AstraJarvis) AstraJarvis.setOrb('idle');
+      }
+    }, 45000);
   } else {
     await new Promise(r => setTimeout(r, 700));
     const reply = demoReply(text);
     appendMsg(logId, 'astra', reply);
+    if(window.AstraJarvis) AstraJarvis.onChatResponse(reply);
   }
 }
 
@@ -461,15 +556,69 @@ function handleBrainEvent(raw){
       window.astra.sendToPython({ type: 'list_missions' });
       window.astra.sendToPython({ type: 'health' });
     }
+    // Light spoken confirm when brain connects (short)
+    if(window.AstraJarvis && data.provider){
+      // don't stack on top of boot greeting if still speaking
+    }
+  } else if(type === 'brain_status'){
+    const st = (data.status || '').toLowerCase();
+    if(st === 'online'){
+      setStatus('ONLINE', true);
+      setIndicator('ind-ollama', true);
+    } else if(st === 'starting' || st === 'restarting'){
+      setStatus('BRAIN ' + st.toUpperCase(), false);
+    } else {
+      setStatus('BRAIN OFFLINE', false);
+      setIndicator('ind-ollama', false);
+      // Unstick typing indicator if chat was mid-flight
+      const log = document.getElementById(pendingLog);
+      if(log){
+        const t = log.querySelector('.typing-row');
+        if(t) t.remove();
+      }
+      if(streamEl){ endStream(null); }
+      appendMsg(pendingLog || 'dash-chat-log', 'astra',
+        'Brain offline' + (data.detail ? ` (${data.detail})` : '') + '. Auto-restarting…');
+    }
   } else if(type === 'chat_start'){
-    // typing already shown
+    if(window.AstraJarvis) AstraJarvis.onChatStart();
   } else if(type === 'chat_delta'){
     appendStreamDelta(data.text || '');
   } else if(type === 'chat_response'){
+    if(chatWatchdog){ clearTimeout(chatWatchdog); chatWatchdog = null; }
     endStream(data.text);
     // remove leftover typing
     const log = document.getElementById(pendingLog);
     if(log){ const t = log.querySelector('.typing-row'); if(t) t.remove(); }
+    if(data.ms != null){
+      const el = document.getElementById('m-latency');
+      if(el) el.textContent = (data.ms < 1000 ? data.ms + 'ms' : (data.ms/1000).toFixed(1) + 's');
+    }
+    if(data.model){
+      const ms = document.getElementById('m-model-short');
+      if(ms) ms.textContent = String(data.model).split('/').pop().replace('llama-3.1-','') || data.model;
+    }
+    // Speak only if TTS enabled
+    if(window.AstraJarvis) AstraJarvis.onChatResponse(data.text || streamBuf || '');
+  } else if(type === 'chat_metrics'){
+    const el = document.getElementById('m-latency');
+    if(el && data.ms != null) el.textContent = data.ms + 'ms';
+    if(data.model){
+      const ms = document.getElementById('m-model-short');
+      if(ms) ms.textContent = String(data.model).split('/').pop().replace('llama-3.','') || data.model;
+    }
+    if(data.provider){
+      const pb = document.getElementById('provider-badge');
+      if(pb) pb.textContent = (data.provider === 'ollama' ? 'Ollama local' : data.provider) + (data.model ? ' · ' + String(data.model).split('/').pop() : '');
+    }
+  } else if(type === 'rag_hits'){
+    renderRagHits(data.hits || []);
+    if(data.stats) applyRagStats(data.stats);
+  } else if(type === 'rag_stats' || type === 'rag_import'){
+    applyRagStats(data);
+    if(type === 'rag_import'){
+      appendMsg('dash-chat-log', 'astra', `Absorbed ${data.count || 0} turns from ${data.source || 'import'}. Training pairs + memory updated.`);
+    }
   } else if(type === 'tool_call'){
     pushToolTrace(data.name, data.status || 'run', JSON.stringify(data.args||{}));
   } else if(type === 'tool_result'){
@@ -493,37 +642,65 @@ function handleBrainEvent(raw){
     addCVEvent('speech', `Heard: "${data.text}"`);
     const pttInd = document.getElementById('ptt-ind');
     if(pttInd) pttInd.classList.remove('active');
-    sendToASTRA(data.text, pendingLog);
+    if(window.AstraJarvis && AstraJarvis.onSpeechTranscript){
+      AstraJarvis.onSpeechTranscript(data.text);
+    } else {
+      sendToASTRA(data.text, pendingLog);
+    }
+  } else if(type === 'speech_error'){
+    addCVEvent('speech', data.msg || 'STT error');
+    if(window.AstraJarvis && AstraJarvis.onSpeechError){
+      AstraJarvis.onSpeechError(data.msg || 'Speech error');
+    }
+  } else if(type === 'mcp_status' || type === 'mcp_ready' || type === 'mcp_tools'){
+    renderMcpStatus(data);
+  } else if(type === 'mcp_result'){
+    appendMsg('dash-chat-log', 'astra', 'MCP result:\n' + JSON.stringify(data.result, null, 2).slice(0, 1200));
+  } else if(type === 'nlp_analysis'){
+    updateIntentHUD(data.intent, data.confidence);
+    const tools = (data.suggested_tools || []).join(', ') || '—';
+    addCVEvent('nlp', `Intent: ${data.intent} (${Math.round((data.confidence||0)*100)}%) · tools: ${tools}`);
   } else if(type === 'cv_ready'){
     setIndicator('ind-cam', true);
     setIndicator('ind-gesture', true);
-    setCVStatus('cvs-mp', 'ok', 'Online');
-    addCVEvent('gesture', 'MediaPipe loaded — gesture detection active');
+    const backend = data.backend || 'mediapipe';
+    setCVStatus('cvs-mp', 'ok', backend === 'opencv' ? 'OpenCV' : 'MediaPipe');
+    addCVEvent('gesture', data.msg || `CV v2 ready (${backend})`);
   } else if(type === 'webcam_active'){
-    setCVStatus('cvs-cam', 'ok', 'Online');
-    addCVEvent('presence', 'Webcam active — presence tracking');
+    setCVStatus('cvs-cam', 'ok', data.camera != null ? `Cam ${data.camera}` : 'Online');
+    addCVEvent('presence', data.msg || 'Webcam active — presence tracking');
   } else if(type === 'gesture'){
     const g = data.gesture, action = data.action;
-    addCVEvent('gesture', `Gesture: ${g} → ${action}`);
+    addCVEvent('gesture', `Gesture: ${g} → ${action}${data.confidence != null ? ' · ' + Math.round(data.confidence*100) + '%' : ''}`);
     updateGestureHUD(g);
     handleGestureAction(action);
   } else if(type === 'presence'){
     const p = data.present;
     const el = document.getElementById('m-presence');
     const bar = document.getElementById('m-presence-bar');
-    if(el) el.textContent = p ? 'At desk' : 'Away';
-    if(bar) bar.style.width = p ? '100%' : '0%';
+    if(el){
+      const conf = data.confidence != null ? ` · ${Math.round(data.confidence*100)}%` : '';
+      el.textContent = p ? ('At desk' + conf) : 'Away';
+    }
+    if(bar) bar.style.width = p ? (data.confidence != null ? Math.round(data.confidence*100)+'%' : '100%') : '0%';
+    if(data.attention != null) updateAttention(data.attention);
     addCVEvent('presence', p ? 'User at desk' : 'User away');
+  } else if(type === 'attention'){
+    updateAttention(data.score);
   } else if(type === 'away_detected'){
     if(timerRunning){ clearInterval(timerInterval); timerRunning = false; appendMsg('dash-chat-log','astra','You stepped away — focus timer paused.'); }
+  } else if(type === 'screen_change'){
+    addCVEvent('screen', data.msg || 'Screen content changed');
+    setCVStatus('cvs-screen', 'ok', 'Change');
   } else if(type === 'screen_insight'){
     const bar = document.getElementById('insight-bar');
     const txt = document.getElementById('insight-text');
     if(bar && txt){ txt.textContent = data.text; bar.style.display = 'flex'; }
     setCVStatus('cvs-screen', 'ok', 'Online');
-    addCVEvent('mode', `Screen: ${data.text.substring(0,60)}...`);
+    addCVEvent('screen', `Screen: ${(data.text||'').substring(0,60)}...`);
   } else if(type === 'screen_watch_active'){
-    setCVStatus('cvs-screen', 'ok', 'Online');
+    setCVStatus('cvs-screen', 'ok', 'Watch');
+    addCVEvent('screen', data.msg || 'Screen awareness online');
   } else if(type === 'webhook_server_ready'){
     setWebhookOnline(data.port, data.msg);
   } else if(type === 'webhook_in'){
@@ -584,9 +761,31 @@ function handleGestureAction(action){
 function updateGestureHUD(gesture){
   const hud = document.getElementById('gesture-hud');
   const lbl = document.getElementById('gesture-label');
-  const icons = {'FIST':'✊','OPEN_HAND':'🖐','PEACE':'✌️','THUMBS_UP':'👍','POINTING_UP':'☝️','POINTING_DOWN':'👇'};
-  if(lbl) lbl.textContent = (icons[gesture]||'') + ' ' + gesture.replace('_',' ');
+  const icons = {'FIST':'✊','OPEN_HAND':'🖐','PEACE':'✌️','THUMBS_UP':'👍','POINTING_UP':'☝️','POINTING_DOWN':'👇','PINCH':'🤏','OK':'👌'};
+  if(lbl) lbl.textContent = (icons[gesture]||'') + ' ' + String(gesture||'').replace(/_/g,' ');
   if(hud){ hud.classList.add('active'); setTimeout(() => hud.classList.remove('active'), 2000); }
+}
+
+function updateIntentHUD(intent, confidence){
+  const hud = document.getElementById('intent-hud');
+  const lbl = document.getElementById('intent-label');
+  const pct = confidence != null ? ` ${Math.round(confidence*100)}%` : '';
+  if(lbl) lbl.textContent = 'intent: ' + (intent || '—') + pct;
+  if(hud){ hud.classList.add('active'); setTimeout(() => hud.classList.remove('active'), 2500); }
+}
+
+function updateAttention(score){
+  if(score == null || isNaN(score)) return;
+  const n = Math.max(0, Math.min(100, Math.round(Number(score) * 100)));
+  const el = document.getElementById('m-attention');
+  const bar = document.getElementById('m-attention-bar');
+  const focus = document.getElementById('m-focus');
+  const fbar = document.getElementById('m-focus-bar');
+  if(el) el.innerHTML = n + '<span>/100</span>';
+  if(bar) bar.style.width = n + '%';
+  // Blend attention into focus score display
+  if(focus) focus.innerHTML = n + '<span>/100</span>';
+  if(fbar) fbar.style.width = n + '%';
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -658,13 +857,18 @@ async function loadMemory(){
   window.astra.sendToPython({ type: 'memory_get' });
 }
 
-// ── Push-to-talk ──────────────────────────────────────────────────────────────
+// ── Push-to-talk + Jarvis voice ────────────────────────────────────────────────
 if(isElectron){
   window.astra.on('ptt-start', () => {
     const pttInd = document.getElementById('ptt-ind');
     if(pttInd) pttInd.classList.add('active');
-    window.astra.sendToPython({type:'ptt_start'});
-    addCVEvent('speech','Push-to-talk activated');
+    // Browser Web Speech — stable Jarvis path (Python Whisper optional)
+    if(window.AstraJarvis){
+      AstraJarvis.startListening();
+    } else {
+      window.astra.sendToPython({type:'ptt_start'});
+    }
+    addCVEvent('speech','Push-to-talk activated (Jarvis voice)');
   });
 
   window.astra.on('activate-mode', (modeName) => {
@@ -680,9 +884,9 @@ if(isElectron){
 
 // ── Day Summary ───────────────────────────────────────────────────────────────
 const summaries = [
-  '// GROK ONLINE — WEBHOOKS ARMED ON :9003',
+  '// JARVIS VOICE ONLINE — SAY “ASTRA”',
   '// ASTRA ONLINE — SYSTEMS NOMINAL',
-  '// CONTEXT MEMORY ACTIVE — READY TO EXECUTE',
+  '// NVIDIA BRAIN · WEBHOOKS · MISSIONS READY',
 ];
 const sub = document.getElementById('day-summary');
 if(sub) sub.textContent = summaries[Math.floor(Math.random()*summaries.length)];
@@ -694,17 +898,23 @@ setTimeout(() => {
     setStatus('DEMO MODE', true);
     const pill = document.querySelector('.status-pill');
     if(pill){ pill.classList.remove('online'); pill.classList.add('demo'); }
-    addCVEvent('mode','Running in browser demo — Electron not detected');
-    addCVEvent('mode','All features available when running as desktop app');
-    setCVStatus('cvs-whisper','error','Needs desktop');
-    setCVStatus('cvs-mp','error','Needs desktop');
-    setCVStatus('cvs-cam','error','Needs desktop');
-    setCVStatus('cvs-screen','error','Needs desktop');
-    setCVStatus('cvs-ollama','error','Needs desktop');
+    addCVEvent('mode','Bridge missing — open via ASTRA.bat (web server)');
   } else {
-    // Probe webhook health from renderer (brain may still be starting)
+    setStatus(isWeb ? 'WEB ONLINE' : 'ONLINE', true);
     fetch('http://localhost:9003/health').then(r => r.json()).then(j => {
       setWebhookOnline(j.port || 9003, j.status);
     }).catch(() => {});
+    window.astra.sendToPython({ type: 'rag_stats' });
+    window.astra.sendToPython({ type: 'mcp_status' });
+    const pb = document.getElementById('provider-badge');
+    if(pb && isWeb) pb.textContent = 'Web · local-first';
+  }
+  // Boot Jarvis voice (mic STT) — works in real browsers
+  if(window.AstraJarvis){
+    try { AstraJarvis.boot(); } catch(e){ console.warn('Jarvis boot', e); }
   }
 }, 1200);
+
+document.getElementById('dash-input')?.addEventListener('keydown', (e) => {
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendDashChat(); }
+});

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu, shell, nativeImage, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -57,12 +57,15 @@ const store = {
 function loadEnvFile() {
   const envPath = path.join(__dirname, '../../.env');
   if (!fs.existsSync(envPath)) return;
-  for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+  let raw = fs.readFileSync(envPath, 'utf8');
+  // strip UTF-8 BOM if present
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  for (const line of raw.split(/\r?\n/)) {
     const t = line.trim();
     if (!t || t.startsWith('#')) continue;
     const i = t.indexOf('=');
     if (i === -1) continue;
-    const key = t.slice(0, i).trim();
+    const key = t.slice(0, i).trim().replace(/^\uFEFF/, '');
     const val = t.slice(i + 1).trim();
     if (key && process.env[key] === undefined) process.env[key] = val;
   }
@@ -73,6 +76,19 @@ let tray = null;
 let pythonProcess = null;
 let wsServer = null;
 let isQuitting = false;
+let pythonRestartTimer = null;
+let pythonRestartCount = 0;
+let brainReady = false;
+
+function notifyBrain(status, detail) {
+  const payload = { type: 'brain_status', status, detail: detail || '', ts: new Date().toISOString() };
+  log('brain_status ' + status + (detail ? ' ' + detail : ''));
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('python-event', JSON.stringify(payload));
+    } catch (_) {}
+  }
+}
 
 function getIconPath() {
   return path.join(__dirname, '../../assets/icon.png');
@@ -130,13 +146,21 @@ function createWindow() {
 }
 
 function startPythonBrain() {
+  if (isQuitting) return;
+  if (pythonProcess) {
+    try { pythonProcess.kill(); } catch (_) {}
+    pythonProcess = null;
+  }
+
   const scriptPath = path.join(__dirname, '../brain/server.py');
+  const projectRoot = path.join(__dirname, '../..');
   if (!fs.existsSync(scriptPath)) {
     log('python server.py missing');
+    notifyBrain('offline', 'server.py missing');
     return;
   }
 
-  // Prefer py -3 on Windows
+  // Prefer py -3 on Windows, fall back to python
   const isWin = process.platform === 'win32';
   const cmd = isWin ? 'py' : 'python3';
   const args = isWin ? ['-3', scriptPath] : [scriptPath];
@@ -144,17 +168,25 @@ function startPythonBrain() {
   try {
     pythonProcess = spawn(cmd, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: projectRoot,
       env: {
         ...process.env,
-        PYTHONPATH: path.join(__dirname, '../brain'),
+        PYTHONPATH: path.join(__dirname, '../brain') + path.delimiter + path.join(__dirname, '..'),
         PYTHONUNBUFFERED: '1',
+        // Keep chat stable — native CV/speech often crash the brain on Windows
+        ASTRA_ENABLE_CV: process.env.ASTRA_ENABLE_CV || '0',
+        ASTRA_ENABLE_SPEECH: process.env.ASTRA_ENABLE_SPEECH || '0',
       },
       windowsHide: true,
       detached: false,
     });
     log('python spawned pid=' + pythonProcess.pid);
+    brainReady = false;
+    notifyBrain('starting', 'pid=' + pythonProcess.pid);
   } catch (e) {
     log('python spawn failed: ' + e.message);
+    notifyBrain('offline', e.message);
+    schedulePythonRestart();
     return;
   }
 
@@ -165,17 +197,46 @@ function startPythonBrain() {
     buf = lines.pop() || '';
     for (const line of lines) {
       const msg = line.trim();
-      if (msg && mainWindow && !mainWindow.isDestroyed()) {
+      if (!msg) continue;
+      try {
+        const ev = JSON.parse(msg);
+        if (ev && (ev.type === 'brain_ready' || ev.type === 'pong')) {
+          brainReady = true;
+          pythonRestartCount = 0;
+          notifyBrain('online', ev.provider || ev.msg || '');
+        }
+      } catch (_) {}
+      if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('python-event', msg);
       }
     }
   });
-  pythonProcess.stderr.on('data', (data) => log('[Python stderr] ' + data.toString().slice(0, 500)));
-  pythonProcess.on('error', (err) => log('python error: ' + err.message));
+  pythonProcess.stderr.on('data', (data) => log('[Python stderr] ' + data.toString().slice(0, 800)));
+  pythonProcess.on('error', (err) => {
+    log('python error: ' + err.message);
+    notifyBrain('offline', err.message);
+  });
   pythonProcess.on('close', (code) => {
     log('python exited code=' + code);
     pythonProcess = null;
+    brainReady = false;
+    notifyBrain('offline', 'exit code ' + code);
+    if (!isQuitting) schedulePythonRestart();
   });
+}
+
+function schedulePythonRestart() {
+  if (isQuitting) return;
+  if (pythonRestartTimer) return;
+  pythonRestartCount += 1;
+  // Back off: 2s, 4s, 8s… cap 30s
+  const delay = Math.min(30000, 2000 * Math.pow(2, Math.min(pythonRestartCount - 1, 4)));
+  log('python restart scheduled in ' + delay + 'ms (attempt ' + pythonRestartCount + ')');
+  notifyBrain('restarting', 'in ' + Math.round(delay / 1000) + 's');
+  pythonRestartTimer = setTimeout(() => {
+    pythonRestartTimer = null;
+    startPythonBrain();
+  }, delay);
 }
 
 function startWSServer() {
@@ -300,7 +361,12 @@ ipcMain.on('send-to-python', (_, msg) => {
       pythonProcess.stdin.write(JSON.stringify(msg) + '\n');
     } catch (e) {
       log('python write failed: ' + e.message);
+      notifyBrain('offline', 'write failed: ' + e.message);
     }
+  } else {
+    log('python not ready — drop msg type=' + (msg && msg.type));
+    notifyBrain('offline', 'Brain not running — restarting…');
+    if (!pythonProcess && !pythonRestartTimer) schedulePythonRestart();
   }
 });
 
@@ -322,6 +388,21 @@ if (!gotLock) {
   app.whenReady().then(() => {
     log('app.whenReady');
     try { loadEnvFile(); } catch (e) { log('loadEnv ' + e.message); }
+
+    // Allow mic + camera for Jarvis voice / vision preview (renderer Web APIs)
+    try {
+      session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+        const allow = ['media', 'microphone', 'camera', 'mediaKeySystem', 'display-capture'].includes(permission);
+        log('permission ' + permission + ' → ' + (allow ? 'allow' : 'deny'));
+        callback(allow);
+      });
+      session.defaultSession.setPermissionCheckHandler((_wc, permission) => {
+        return ['media', 'microphone', 'camera', 'display-capture'].includes(permission);
+      });
+    } catch (e) {
+      log('permission handlers failed: ' + e.message);
+    }
+
     try { createWindow(); } catch (e) { log('createWindow ' + e.stack); }
     try { setupTray(); } catch (e) { log('setupTray ' + e.stack); }
     try { registerShortcuts(); } catch (e) { log('shortcuts ' + e.stack); }

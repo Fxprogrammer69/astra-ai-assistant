@@ -6,9 +6,13 @@
 <title>ASTRA</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css"/>
 <link rel="stylesheet" href="style.css"/>
+<script>window.ASTRA_WS_PORT = window.ASTRA_WS_PORT || '8788';</script>
+<script src="astra-bridge.js"></script>
 </head>
-<body>
+<body class="jarvis-theme astra-web">
 <div class="noise" aria-hidden="true"></div>
+<div class="holo-grid" aria-hidden="true"></div>
+<div class="scanlines" aria-hidden="true"></div>
 
 <div class="shell">
 
@@ -19,6 +23,7 @@
       <span class="status-pill online"><span class="dot"></span><span id="status-text">BOOTING</span></span>
       <span class="provider-badge" id="provider-badge">Cloud LLM</span>
       <span class="mode-badge" id="mode-badge">ENGINEER MODE</span>
+      <span class="voice-pill" id="voice-pill" title="Voice interface"><i class="ti ti-microphone"></i><span id="voice-live-text">—</span></span>
     </div>
     <div class="tb-drag" id="tb-drag"></div>
     <div class="tb-right">
@@ -63,78 +68,111 @@
   <!-- MAIN -->
   <main class="main" id="main-content">
 
-    <!-- DASHBOARD -->
-    <div class="view active" id="view-dashboard">
-      <div class="view-header">
-        <div>
-          <h1 id="greeting">Good evening, Commander.</h1>
-          <p class="sub" id="day-summary">Loading daily summary...</p>
+    <!-- DASHBOARD — chat-first console -->
+    <div class="view active console-view" id="view-dashboard">
+      <div class="console-top">
+        <div class="console-brand">
+          <div class="jarvis-core-wrap mini">
+            <div class="jarvis-ring idle" id="jarvis-ring"></div>
+            <div class="jarvis-core idle" id="jarvis-core">
+              <div class="jarvis-core-inner"><span class="jarvis-core-letter">A</span></div>
+            </div>
+          </div>
+          <div>
+            <h1 id="greeting">ASTRA Console</h1>
+            <p class="sub" id="day-summary">Fast mode · RAG memory · continuous learning</p>
+          </div>
         </div>
-        <div class="gesture-hud" id="gesture-hud" title="Last gesture">
-          <i class="ti ti-hand-stop"></i>
-          <span id="gesture-label">No gesture</span>
-        </div>
-      </div>
-
-      <div class="hero-strip">
-        <div class="hero-icon"><i class="ti ti-sparkles"></i></div>
-        <div class="hero-text">
-          <h2>Agent + Grok + webhooks</h2>
-          <p>Tool loop · streaming chat · missions · memory · health · webhooks :9003. Add xAI credits for full Grok.</p>
-        </div>
-      </div>
-      <div class="tool-trace" id="tool-trace" style="display:none"></div>
-
-      <div class="modes-grid">
-        <div class="mode-card active-mode" data-mode="ENGINEER MODE" data-color="#38bdf8" onclick="activateMode(this)">
-          <i class="ti ti-code"></i><div class="mc-name">Engineer</div><div class="mc-status">Active</div>
-        </div>
-        <div class="mode-card" data-mode="STUDENT MODE" data-color="#8b7cf6" onclick="activateMode(this)">
-          <i class="ti ti-book"></i><div class="mc-name">Student</div><div class="mc-status">Standby</div>
-        </div>
-        <div class="mode-card" data-mode="FOUNDER MODE" data-color="#34d399" onclick="activateMode(this)">
-          <i class="ti ti-rocket"></i><div class="mc-name">Founder</div><div class="mc-status">Standby</div>
-        </div>
-        <div class="mode-card" data-mode="FOCUS LOCK" data-color="#fb7185" onclick="activateMode(this)">
-          <i class="ti ti-lock"></i><div class="mc-name">Focus Lock</div><div class="mc-status">Standby</div>
-        </div>
-        <div class="mode-card" data-mode="TRADING MODE" data-color="#f5a524" onclick="activateMode(this)">
-          <i class="ti ti-chart-line"></i><div class="mc-name">Trading</div><div class="mc-status">Standby</div>
-        </div>
-        <div class="mode-card" data-mode="RECOVERY MODE" data-color="#f9a8d4" onclick="activateMode(this)">
-          <i class="ti ti-heart"></i><div class="mc-name">Recovery</div><div class="mc-status">Standby</div>
+        <div class="console-metrics">
+          <div class="cm"><span class="cm-l">LATENCY</span><span class="cm-v" id="m-latency">—</span></div>
+          <div class="cm"><span class="cm-l">RAG</span><span class="cm-v" id="m-rag">0</span></div>
+          <div class="cm"><span class="cm-l">MEMORY</span><span class="cm-v" id="m-mem">0</span></div>
+          <div class="cm"><span class="cm-l">TRAIN</span><span class="cm-v" id="m-train">0</span></div>
+          <div class="cm"><span class="cm-l">MODEL</span><span class="cm-v" id="m-model-short">8B</span></div>
         </div>
       </div>
 
-      <div class="metrics-row">
-        <div class="metric"><div class="metric-label">Focus Score</div><div class="metric-val" id="m-focus">87<span>/100</span></div><div class="mbar"><div class="mbar-fill" style="width:87%;background:#34d399"></div></div></div>
-        <div class="metric"><div class="metric-label">Tasks Done</div><div class="metric-val" id="m-tasks">6<span>/9</span></div><div class="mbar"><div class="mbar-fill" style="width:66%"></div></div></div>
-        <div class="metric"><div class="metric-label">Deep Work</div><div class="metric-val">3h<span>42m</span></div><div class="mbar"><div class="mbar-fill" style="width:74%;background:#8b7cf6"></div></div></div>
-        <div class="metric"><div class="metric-label">Presence</div><div class="metric-val" id="m-presence" style="font-size:14px;padding-top:4px">Detecting...</div><div class="mbar"><div class="mbar-fill" id="m-presence-bar" style="width:0%;background:#38bdf8"></div></div></div>
-      </div>
+      <div class="console-body">
+        <div class="console-chat">
+          <div class="mode-strip" id="mode-strip">
+            <button type="button" class="mode-chip active-mode" data-mode="ENGINEER MODE" data-color="#38bdf8" onclick="activateMode(this)">Engineer</button>
+            <button type="button" class="mode-chip" data-mode="STUDENT MODE" data-color="#8b7cf6" onclick="activateMode(this)">Student</button>
+            <button type="button" class="mode-chip" data-mode="FOUNDER MODE" data-color="#34d399" onclick="activateMode(this)">Founder</button>
+            <button type="button" class="mode-chip" data-mode="FOCUS LOCK" data-color="#fb7185" onclick="activateMode(this)">Focus</button>
+            <button type="button" class="mode-chip" data-mode="TRADING MODE" data-color="#f5a524" onclick="activateMode(this)">Trading</button>
+            <span class="intent-hud" id="intent-hud"><i class="ti ti-brain"></i><span id="intent-label">intent: —</span></span>
+            <span class="gesture-hud" id="gesture-hud" style="display:none"><i class="ti ti-hand-stop"></i><span id="gesture-label">—</span></span>
+          </div>
 
-      <div class="insight-bar" id="insight-bar" style="display:none">
-        <i class="ti ti-eye" aria-hidden="true"></i>
-        <span id="insight-text">Screen insight loading...</span>
-        <button onclick="document.getElementById('insight-bar').style.display='none'" style="margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer"><i class="ti ti-x"></i></button>
-      </div>
+          <div class="jp-heard compact" id="jarvis-heard">Voice: Alt+Space · Say “Astra …”</div>
+          <div class="jarvis-bars" id="jarvis-bars" aria-hidden="true">
+            <span class="jv-bar"></span><span class="jv-bar"></span><span class="jv-bar"></span>
+            <span class="jv-bar"></span><span class="jv-bar"></span><span class="jv-bar"></span>
+            <span class="jv-bar"></span><span class="jv-bar"></span>
+          </div>
+          <div class="tool-trace" id="tool-trace" style="display:none"></div>
+          <div class="insight-bar" id="insight-bar" style="display:none">
+            <i class="ti ti-eye"></i><span id="insight-text"></span>
+            <button onclick="document.getElementById('insight-bar').style.display='none'" style="margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer"><i class="ti ti-x"></i></button>
+          </div>
 
-      <div class="quick-chat-area">
-        <div class="chat-log" id="dash-chat-log">
-          <div class="msg astra-msg"><div class="msg-who">ASTRA · GROK</div><div class="msg-body">Systems online. Grok connected. Webhooks listening. How can I help you execute today?</div></div>
+          <div class="quick-chat-area fill">
+            <div class="chat-log" id="dash-chat-log">
+              <div class="msg astra-msg"><div class="msg-who">ASTRA · FAST · RAG</div><div class="msg-body">Online. Every message is stored and used to learn. Paste other AI chats in the Memory rail to teach me. Ask anything.</div></div>
+            </div>
+            <div class="input-row">
+              <span class="ptt-indicator" id="ptt-ind" title="Push-to-talk"><i class="ti ti-microphone"></i></span>
+              <input id="dash-input" class="cmd-input" placeholder="Message ASTRA… (Enter to send)" autocomplete="off"/>
+              <button class="send-btn" onclick="sendDashChat()" title="Send"><i class="ti ti-arrow-up"></i></button>
+            </div>
+            <div class="chips">
+              <button class="chip" onclick="window.AstraJarvis && AstraJarvis.startListening()">Speak</button>
+              <button class="chip" onclick="quickSend('hi')">hi</button>
+              <button class="chip" onclick="quickSend('Reply in one short sentence: systems check')">Speed test</button>
+              <button class="chip" onclick="quickSend('What do you remember about me?')">What do you know?</button>
+              <button class="chip" onclick="clearChatContext()">Clear chat memory</button>
+              <button class="chip" onclick="document.getElementById('rag-import-box')?.focus()">Import chats</button>
+            </div>
+            <div class="jp-actions console-actions">
+              <button type="button" class="jv-btn" id="jv-listen-btn"><i class="ti ti-ear"></i> Listen</button>
+              <button type="button" class="jv-btn primary" id="jarvis-mic-fab"><i class="ti ti-microphone"></i> Speak</button>
+              <button type="button" class="jv-btn" id="jv-cam-btn"><i class="ti ti-camera"></i> Cam</button>
+              <label class="jv-toggle"><input type="checkbox" id="jv-tts-toggle"/><span>TTS</span></label>
+              <span class="jp-v" id="jarvis-state-label">STANDBY</span>
+            </div>
+            <div class="jarvis-cam-wrap">
+              <video id="jarvis-cam" playsinline muted></video>
+              <div class="jarvis-cam-overlay">OPTICAL · LIVE</div>
+            </div>
+          </div>
         </div>
-        <div class="input-row">
-          <span class="ptt-indicator" id="ptt-ind" title="Push-to-talk: Alt+Space"><i class="ti ti-microphone"></i></span>
-          <input id="dash-input" class="cmd-input" placeholder="Ask ASTRA anything… or Alt+Space to speak"/>
-          <button class="send-btn" onclick="sendDashChat()" title="Send"><i class="ti ti-arrow-up"></i></button>
-        </div>
-        <div class="chips">
-          <button class="chip" onclick="quickSend('Activate focus lock')">Focus Lock</button>
-          <button class="chip" onclick="quickSend('Plan my next 4 hours')">Schedule</button>
-          <button class="chip" onclick="quickSend('Summarize today')">Summary</button>
-          <button class="chip" onclick="quickSend('Start deep work session')">Deep Work</button>
-          <button class="chip" onclick="quickSend('Summarize macro news')">Markets</button>
-        </div>
+
+        <aside class="rag-rail" id="rag-rail">
+          <div class="rp-title">Live Memory · RAG</div>
+          <div class="rag-stats" id="rag-stats-line">Indexing…</div>
+          <div class="rag-hits" id="rag-hits"><div class="rag-empty">Retrieved memories appear here on each message.</div></div>
+          <div class="rp-title" style="margin-top:14px">Teach ASTRA</div>
+          <p class="sub" style="margin-bottom:8px">Paste ChatGPT/Claude/Cursor chats or any User:/Assistant: log.</p>
+          <textarea id="rag-import-box" class="rag-import" placeholder="User: I prefer short answers&#10;Assistant: Got it.&#10;&#10;User: My name is …"></textarea>
+          <div class="rag-import-row">
+            <select id="rag-source" class="model-sel">
+              <option value="chatgpt">ChatGPT</option>
+              <option value="claude">Claude</option>
+              <option value="cursor">Cursor</option>
+              <option value="grok">Grok</option>
+              <option value="other_ai">Other AI</option>
+              <option value="paste">Paste</option>
+            </select>
+            <button class="action-btn" onclick="importRagText()"><i class="ti ti-brain"></i> Absorb</button>
+          </div>
+          <input type="text" id="rag-fact-input" class="sc-input" style="margin-top:10px" placeholder="Remember fact…"/>
+          <button class="action-btn ghost" style="width:100%;margin-top:6px" onclick="addRagFact()">Save fact</button>
+          <div class="hidden-metrics" style="display:none">
+            <div id="m-attention">—</div><div id="m-attention-bar"></div>
+            <div id="m-tasks">0</div><div id="m-focus">0</div><div id="m-focus-bar"></div>
+            <div id="m-presence">—</div><div id="m-presence-bar"></div>
+          </div>
+        </aside>
       </div>
     </div>
 
@@ -151,12 +189,12 @@
       </div>
       <div class="input-row chat-input-row">
         <select id="model-select" class="model-sel" title="Model routing">
-          <option value="default">Agent + Auto LLM</option>
-          <option value="claude">Claude only</option>
-          <option value="tools">Local tools only</option>
+          <option value="default">Auto (Ollama → NVIDIA)</option>
+          <option value="local">Ollama local only</option>
           <option value="chat_only">Chat only (no tools)</option>
+          <option value="tools">Local tools only</option>
+          <option value="claude">Claude only</option>
           <option value="grok">Grok only (xAI)</option>
-          <option value="local">Ollama only</option>
         </select>
         <input id="chat-input" class="cmd-input" placeholder="Message ASTRA..."/>
         <button class="send-btn" onclick="sendFullChat()"><i class="ti ti-arrow-up"></i></button>
@@ -236,7 +274,8 @@
           <button class="sc-btn" onclick="saveSettings()">Save Settings</button>
         </div>
         <div class="settings-card">
-          <div class="sc-title">CV &amp; Speech</div>
+          <div class="sc-title">Jarvis · Voice</div>
+          <p class="sub" style="margin-bottom:10px">Click <b>Speak</b> (or hold the button), talk, click again. Audio is sent to the brain as WAV (Whisper / SpeechRecognition). Allow the mic when Windows asks.</p>
           <label class="sc-label">Whisper Model</label>
           <select class="sc-input" id="s-whisper">
             <option value="tiny">tiny (fastest)</option>
@@ -247,10 +286,21 @@
           <input class="sc-input" type="number" id="s-screenshot" value="10" min="5" max="60"/>
           <label class="sc-label" style="margin-top:12px">Gesture Confidence</label>
           <input class="sc-input" type="range" id="s-gesture-conf" min="50" max="95" value="75"/>
+          <button class="sc-btn" style="margin-top:12px" onclick="window.AstraJarvis && AstraJarvis.startListening()">Test mic now</button>
+          <button class="sc-btn" style="margin-top:8px;background:transparent;border:1px solid var(--border);color:var(--text)" onclick="clearChatContext()">Clear polluted chat memory</button>
+        </div>
+        <div class="settings-card">
+          <div class="sc-title">MCP Connectors</div>
+          <p class="sub" style="margin-bottom:10px">External MCP servers (filesystem, GitHub, Brave, …). Edit <code>models/mcp.json</code>, set <code>"enabled": true</code>, put API keys in env, then reload.</p>
+          <div id="mcp-status-box" class="rag-stats">Not loaded yet…</div>
+          <button class="sc-btn" style="margin-top:10px" onclick="reloadMcp()">Reload MCP servers</button>
+          <button class="sc-btn" style="margin-top:8px;background:transparent;border:1px solid var(--border);color:var(--text)" onclick="listMcpTools()">List MCP tools</button>
+          <button class="sc-btn" style="margin-top:8px;background:transparent;border:1px solid var(--border);color:var(--text)" onclick="window.astra && window.astra.openExternal('file:///C:/Users/royru/OneDrive/Desktop/Astra-Desktop/models/mcp.json')">Open mcp.json</button>
         </div>
         <div class="settings-card">
           <div class="sc-title">Shortcuts</div>
           <div class="shortcut-item"><span>Push-to-talk</span><kbd>Alt + Space</kbd></div>
+          <div class="shortcut-item"><span>Wake word</span><kbd>Astra …</kbd></div>
           <div class="shortcut-item"><span>Quick open</span><kbd>Ctrl + Shift + A</kbd></div>
           <div class="shortcut-item"><span>Focus lock</span><kbd>Ctrl + Shift + F</kbd></div>
           <div class="shortcut-item"><span>Send message</span><kbd>Enter</kbd></div>
@@ -392,6 +442,12 @@
 
   <!-- RIGHT PANEL -->
   <aside class="right-panel">
+    <div class="rp-section jarvis-mini">
+      <div class="rp-title">Voice</div>
+      <div class="jv-mini-orb idle" id="jv-mini-orb"></div>
+      <button type="button" class="tbtn active" style="width:100%;margin-top:8px" onclick="window.AstraJarvis && AstraJarvis.startListening()">PUSH TO TALK</button>
+    </div>
+
     <div class="rp-section">
       <div class="rp-title">Focus Timer</div>
       <div class="timer-block">
@@ -436,6 +492,7 @@
 
 </div>
 
+<script src="jarvis.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
