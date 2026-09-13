@@ -7,7 +7,7 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "C:\\Users\\royru\\OneDrive\\Desktop"
+        "%USERPROFILE%\\Desktop"
       ],
       "env": {}
     },

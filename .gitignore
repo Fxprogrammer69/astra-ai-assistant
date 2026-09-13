@@ -4,6 +4,8 @@ dist/
 models/memory.json
 models/rag/
 models/training/
+models/astra.db
+models/astra.db-*
 __pycache__/
 *.pyc
 *.pyo
@@ -18,4 +20,3 @@ launch-out.log
 astra-err.log
 astra-out.log
 min-test/
-
